@@ -622,6 +622,23 @@ SCORECARD_MIN_WIN_RATE    = 52.0
 SCORECARD_MIN_CONF_BONUS  = 1
 
 # ================================================================
+#  FASE 4 — POLICY ENGINE (RANKING DE CANDIDATOS)
+# ================================================================
+# Ventana histórica para métricas de policy por activo/setup.
+POLICY_LOOKBACK_TRADES    = 300
+# Muestra mínima para considerar estable el policy score.
+POLICY_MIN_SAMPLE         = 10
+# Pesos del ranking (deben sumar ~1.0).
+POLICY_WEIGHT_WR          = 0.40
+POLICY_WEIGHT_PF          = 0.25
+POLICY_WEIGHT_REWARD      = 0.20
+POLICY_WEIGHT_SAMPLE      = 0.15
+# Umbral de bloqueo duro cuando hay muestra suficiente.
+POLICY_MIN_SCORE          = 0.45
+# Endurecimiento de confianza si policy score es débil.
+POLICY_MIN_CONF_BONUS     = 1
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60

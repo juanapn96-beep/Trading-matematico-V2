@@ -46,6 +46,7 @@ from modules.neural_brain import (
     build_features, check_memory,
     get_learning_report, get_pending_trades, get_memory_stats,
     derive_setup_id, derive_session_from_ind, evaluate_scorecard,
+    evaluate_policy,
 )
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
@@ -354,6 +355,7 @@ def build_context(
     mem_check, sym_cfg: dict,
     cal_events: list = None,
     scorecard_check = None,
+    policy_check = None,
 ) -> str:
     price   = ind.get("price", 0)
     hilbert = ind.get("hilbert", {})
@@ -437,6 +439,24 @@ def build_context(
     else:
         lines += [
             "Sin scorecard disponible",
+            "",
+        ]
+
+    lines += [
+        "── POLICY ENGINE ──",
+    ]
+    if policy_check is not None:
+        lines += [
+            f"Dirección candidata: {policy_check.direction}",
+            f"Policy score: {policy_check.policy_score:.3f} | Block: {policy_check.should_block}",
+            f"WR: {policy_check.win_rate:.1f}% | PF: {policy_check.profit_factor:.2f} | "
+            f"AvgR: {policy_check.avg_reward:+.3f} | n={policy_check.sample_size}",
+            f"Detalle: {policy_check.reason}",
+            "",
+        ]
+    else:
+        lines += [
+            "Sin policy check disponible",
             "",
         ]
 
@@ -1208,6 +1228,8 @@ def _process_symbol(
         session_id = derive_session_from_ind(ind)
         score_buy = evaluate_scorecard(symbol, setup_buy, session_id, mem_buy.regime)
         score_sell = evaluate_scorecard(symbol, setup_sell, session_id, mem_sell.regime)
+        policy_buy = evaluate_policy(symbol, "BUY", setup_buy, session_id, mem_buy.regime)
+        policy_sell = evaluate_policy(symbol, "SELL", setup_sell, session_id, mem_sell.regime)
         if mem_buy.should_block and mem_sell.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
             _set_symbol_status(symbol, "🧠 Memoria bloqueó BUY y SELL")
@@ -1221,9 +1243,22 @@ def _process_symbol(
                 f"[{symbol}] {msg} | BUY={score_buy.reason} | SELL={score_sell.reason}"
             )
             return
-        mem_check = mem_sell if mem_sell.confidence_adj > mem_buy.confidence_adj else mem_buy
-        selected_scorecard = score_sell if mem_check is mem_sell else score_buy
-        features  = feat_buy if mem_check is mem_buy else feat_sell
+        candidates = [
+            ("BUY", feat_buy, mem_buy, score_buy, policy_buy),
+            ("SELL", feat_sell, mem_sell, score_sell, policy_sell),
+        ]
+        viable = [c for c in candidates if not c[2].should_block and not c[3].should_block and not c[4].should_block]
+        if not viable:
+            msg = "🧮 Policy/Scorecard bloqueó candidatos BUY y SELL"
+            _set_symbol_status(symbol, msg[:48])
+            last_action = f"{msg} {symbol}"
+            log.info(
+                f"[{symbol}] {msg} | "
+                f"BUY={policy_buy.reason} | SELL={policy_sell.reason}"
+            )
+            return
+        selected = max(viable, key=lambda x: (x[4].policy_score, x[2].confidence_adj))
+        _, features, mem_check, selected_scorecard, selected_policy = selected
         if mem_check.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
             _set_symbol_status(symbol, f"🧠 {mem_check.warning_msg[:48]}")
@@ -1237,7 +1272,7 @@ def _process_symbol(
         # in _execute_decision will apply the confluence veto after Gemini responds.
         context  = build_context(
             symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
-            cal_events_nearby, selected_scorecard,
+            cal_events_nearby, selected_scorecard, selected_policy,
         )
         decision = ask_gemini(context, sym_cfg)
         _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
@@ -1250,6 +1285,13 @@ def _process_symbol(
     session_id = derive_session_from_ind(ind)
     scorecard = evaluate_scorecard(
         symbol=symbol,
+        setup_id=setup_id,
+        session=session_id,
+        regime=mem_check.regime,
+    )
+    policy = evaluate_policy(
+        symbol=symbol,
+        direction=mem_direction,
         setup_id=setup_id,
         session=session_id,
         regime=mem_check.regime,
@@ -1273,11 +1315,24 @@ def _process_symbol(
         log.info(f"[{symbol}] {msg} | {scorecard.reason}")
         return
 
+    if policy.should_block:
+        msg = (
+            f"📉 Policy vetó {mem_direction} "
+            f"(score={policy.policy_score:.3f} n={policy.sample_size})"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} | {policy.reason}")
+        return
+
     # ── FASE 3: Confluence Gate pre-Gemini (directional path) ──────
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
-    context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby, scorecard)
+    context  = build_context(
+        symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
+        cal_events_nearby, scorecard, policy,
+    )
     decision = ask_gemini(context, sym_cfg)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
@@ -1352,6 +1407,13 @@ def _execute_decision(
             session=session_id,
             regime=mem_check.regime,
         )
+        policy = evaluate_policy(
+            symbol=symbol,
+            direction=action,
+            setup_id=setup_id,
+            session=session_id,
+            regime=mem_check.regime,
+        )
         if scorecard.should_block:
             msg = (
                 f"🧮 Scorecard vetó {action} "
@@ -1361,8 +1423,18 @@ def _execute_decision(
             _set_symbol_status(symbol, msg[:48])
             log.info(f"[{symbol}] {msg} | {scorecard.reason}")
             return
+        if policy.should_block:
+            msg = (
+                f"📉 Policy vetó {action} "
+                f"(score={policy.policy_score:.3f} n={policy.sample_size})"
+            )
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(f"[{symbol}] {msg} | {policy.reason}")
+            return
     else:
         scorecard = None
+        policy = None
 
     min_conf = sym_cfg.get("min_confidence", 6)
     if (
@@ -1371,6 +1443,12 @@ def _execute_decision(
         and scorecard.win_rate < (scorecard.min_win_rate + 5.0)
     ):
         min_conf += int(getattr(cfg, "SCORECARD_MIN_CONF_BONUS", 1))
+    if (
+        policy is not None
+        and policy.sample_size >= int(getattr(cfg, "POLICY_MIN_SAMPLE", 10))
+        and policy.policy_score < (float(getattr(cfg, "POLICY_MIN_SCORE", 0.45)) + 0.1)
+    ):
+        min_conf += int(getattr(cfg, "POLICY_MIN_CONF_BONUS", 1))
     if action == "HOLD" or confidence < min_conf:
         last_action = f"HOLD {symbol} conf={confidence} (min={min_conf})"
         _set_symbol_status(symbol, f"🤖 {action} conf={confidence}/{min_conf}")

@@ -38,6 +38,36 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 18:01 UTC] - FASE 4: Policy Engine (ranking WR/PF/Reward/Sample)
+
+### config.py
+- Añadidos parámetros configurables de Policy Engine:
+  - `POLICY_LOOKBACK_TRADES`
+  - `POLICY_MIN_SAMPLE`
+  - `POLICY_WEIGHT_WR`, `POLICY_WEIGHT_PF`, `POLICY_WEIGHT_REWARD`, `POLICY_WEIGHT_SAMPLE`
+  - `POLICY_MIN_SCORE`
+  - `POLICY_MIN_CONF_BONUS`
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- Añadidos `PolicyCheck` + `evaluate_policy(...)` para calcular `policy_score` por candidato:
+  - Métricas: Win Rate, Profit Factor, Avg Reward y tamaño de muestra
+  - Normalización y combinación ponderada en score `[0,1]`
+  - Bloqueo duro configurable cuando hay muestra suficiente y score bajo
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado Policy Engine en `_process_symbol(...)`:
+  - Ruta lateral: evalúa BUY y SELL en paralelo, descarta candidatos bloqueados por memoria/scorecard/policy
+  - Ranking final por `policy_score` (desempate con `memory confidence_adj`) y selección del mejor candidato
+  - Ruta direccional: añade veto por policy antes de Gemini
+- Integrado safety-net post-Gemini en `_execute_decision(...)` con `evaluate_policy(...)`.
+- `build_context(...)` ahora adjunta bloque `POLICY ENGINE` para pasar score y métricas a la IA.
+- Endurecimiento dinámico de `min_confidence` cuando policy score es marginal.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
 
 ### main.py

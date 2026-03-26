@@ -192,6 +192,21 @@ class ScorecardCheck:
     regime:             str
 
 
+@dataclass
+class PolicyCheck:
+    direction:      str
+    setup_id:       str
+    session:        str
+    regime:         str
+    sample_size:    int
+    win_rate:       float
+    profit_factor:  float
+    avg_reward:     float
+    policy_score:   float
+    should_block:   bool
+    reason:         str
+
+
 # ════════════════════════════════════════════════════════════════
 #  RED NEURONAL MLP — IMPLEMENTACIÓN NUMPY PURA
 # ════════════════════════════════════════════════════════════════
@@ -1035,6 +1050,78 @@ def evaluate_scorecard(
         setup_id=setup_id,
         session=session,
         regime=regime,
+    )
+
+
+def evaluate_policy(
+    symbol: str,
+    direction: str,
+    setup_id: str,
+    session: str,
+    regime: str,
+) -> PolicyCheck:
+    """
+    FASE 4: ranking de candidatos por setup.
+    Combina WR, PF, avg_reward y tamaño de muestra en un policy_score [0,1].
+    """
+    lookback = int(getattr(cfg, "POLICY_LOOKBACK_TRADES", 300))
+    min_sample = int(getattr(cfg, "POLICY_MIN_SAMPLE", 10))
+    w_wr = float(getattr(cfg, "POLICY_WEIGHT_WR", 0.40))
+    w_pf = float(getattr(cfg, "POLICY_WEIGHT_PF", 0.25))
+    w_rw = float(getattr(cfg, "POLICY_WEIGHT_REWARD", 0.20))
+    w_sm = float(getattr(cfg, "POLICY_WEIGHT_SAMPLE", 0.15))
+    min_score = float(getattr(cfg, "POLICY_MIN_SCORE", 0.45))
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    rows = cur.execute("""
+        SELECT result, profit, reward
+        FROM trades
+        WHERE symbol=?
+          AND direction=?
+          AND setup_id=?
+          AND session=?
+          AND regime=?
+          AND result IN ('WIN','LOSS')
+        ORDER BY id DESC
+        LIMIT ?
+    """, (symbol, direction, setup_id, session, regime, lookback)).fetchall()
+    con.close()
+
+    sample = len(rows)
+    wins = sum(1 for r in rows if r[0] == "WIN")
+    losses = sample - wins
+    win_rate = (wins / sample * 100.0) if sample > 0 else 0.0
+
+    gross_win = sum(max(float(r[1] or 0.0), 0.0) for r in rows)
+    gross_loss = sum(abs(min(float(r[1] or 0.0), 0.0)) for r in rows)
+    profit_factor = (gross_win / gross_loss) if gross_loss > 1e-9 else (gross_win if gross_win > 0 else 0.0)
+    avg_reward = (sum(float(r[2] or 0.0) for r in rows) / sample) if sample > 0 else 0.0
+
+    wr_norm = float(np.clip(win_rate / 100.0, 0.0, 1.0))
+    pf_norm = float(np.clip(profit_factor / 2.0, 0.0, 1.0))
+    rw_norm = float(np.clip((avg_reward + 1.0) / 2.0, 0.0, 1.0))
+    sm_norm = float(np.clip(sample / max(min_sample * 2, 1), 0.0, 1.0))
+
+    policy_score = w_wr * wr_norm + w_pf * pf_norm + w_rw * rw_norm + w_sm * sm_norm
+    should_block = sample >= min_sample and policy_score < min_score
+    reason = (
+        f"policy={policy_score:.3f} | WR={win_rate:.1f}% PF={profit_factor:.2f} "
+        f"R={avg_reward:+.3f} n={sample}"
+    )
+
+    return PolicyCheck(
+        direction=direction,
+        setup_id=setup_id,
+        session=session,
+        regime=regime,
+        sample_size=sample,
+        win_rate=round(win_rate, 1),
+        profit_factor=round(float(profit_factor), 3),
+        avg_reward=round(float(avg_reward), 3),
+        policy_score=round(float(policy_score), 3),
+        should_block=should_block,
+        reason=reason,
     )
 
 
