@@ -1,8 +1,9 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — config.py  (v6.4 — FIXES EXHAUSTIVOS)         ║
+║   ZAR ULTIMATE BOT v6 — config.py  (v6.5 — ENV SECURIZATION)          ║
 ║                                                                          ║
-║   CAMBIOS v6.4:                                                         ║
+║   CAMBIOS v6.5:                                                         ║
+║   • FASE 0: Credenciales migradas a .env (python-dotenv)               ║
 ║   • BREAKEVEN_ATR_MULT: BE por ATR en vez de pips fijos                ║
 ║   • SYMBOL_COOLDOWN_SEC: cooldown entre trades del mismo símbolo       ║
 ║   • US500m min_hurst: 0.45→0.38 (índices operan con Hurst bajo)       ║
@@ -12,29 +13,50 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import os
+import sys
+from dotenv import load_dotenv
+
+# Carga el archivo .env desde la raíz del proyecto (si existe)
+load_dotenv()
+
+
+def _require_env(name: str) -> str:
+    """Devuelve el valor de la variable de entorno o termina con error claro."""
+    value = os.environ.get(name, "")
+    if not value:
+        print(
+            f"❌  Variable de entorno requerida no configurada: {name}\n"
+            "    Copia .env.example a .env y rellena todas las credenciales.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
+
+
 # ================================================================
 #  MT5 / EXNESS
 # ================================================================
-MT5_LOGIN    = 198237687
-MT5_PASSWORD = "Popitos00-"
-MT5_SERVER   = "Exness-MT5Trial11"
+MT5_LOGIN    = int(_require_env("MT5_LOGIN"))
+MT5_PASSWORD = _require_env("MT5_PASSWORD")
+MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
 
 # ================================================================
 #  GOOGLE GEMINI
 # ================================================================
-GEMINI_API_KEY = "AIzaSyB4g8YtbLagiwLf4FOmGgR4wCzcQAu44TQ"
+GEMINI_API_KEY = _require_env("GEMINI_API_KEY")
 
 # ================================================================
 #  TELEGRAM
 # ================================================================
-TELEGRAM_TOKEN   = "8742602191:AAGcLQ9f5VUM1t0L0OqFtTFSNlRFbtFoeME"
-TELEGRAM_CHAT_ID = "8683346604"
+TELEGRAM_TOKEN   = _require_env("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = _require_env("TELEGRAM_CHAT_ID")
 
 # ================================================================
 #  APIs EXTERNAS
 # ================================================================
-ALPHA_VANTAGE_KEY = "9JOTZ2ZSOVMFVAVS"
-FINNHUB_KEY       = "d6som81r01qoqoiqsng0d6som81r01qoqoiqsngg"
+ALPHA_VANTAGE_KEY = _require_env("ALPHA_VANTAGE_KEY")
+FINNHUB_KEY       = _require_env("FINNHUB_KEY")
 
 # ================================================================
 #  SÍMBOLOS — 12 ACTIVOS, SESIONES EXPANDIDAS 24/5
