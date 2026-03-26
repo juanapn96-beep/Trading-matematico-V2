@@ -25,6 +25,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
+import numpy as np
 import config as cfg
 
 log = logging.getLogger(__name__)
@@ -162,6 +163,91 @@ def get_lot_size(
     raw_lot = risk_amount / (sl_pips * point_value)
     lot = round(max(0.01, raw_lot), 2)
     log.debug(f"[risk] Lote: {lot} (balance={balance}, sl={sl_pips}, risk={risk_amount:.2f})")
+    return lot
+
+
+def get_lot_size_kelly(
+    balance:      float,
+    sl_pips:      float,
+    symbol:       str,
+    win_rate:     float,
+    avg_rr:       float,
+    n_trades:     int,
+    point_value:  float = 1.0,
+) -> float:
+    """
+    FASE 2 — Tamaño de lote con Criterio de Kelly Fraccionado.
+
+    El Criterio de Kelly calcula la fracción óptima del capital a arriesgar:
+        f* = (b×p - q) / b
+    donde:
+        p   = tasa de victorias (win_rate, 0.0–1.0)
+        q   = 1 - p  (tasa de derrotas)
+        b   = ratio recompensa/riesgo esperado (RR ratio del trade)
+
+    Se usa Kelly Fraccionado (f_actual = KELLY_FRACTION × f*) que:
+        • Reduce la volatilidad del equity vs. Kelly completo
+        • Evita ruina incluso con errores de estimación en p y b
+        • KELLY_FRACTION=0.25 = 25% del Kelly óptimo (conservador)
+
+    SALVAGUARDAS:
+        • Kelly negativo (f*<0) → usar sizing estándar (señal: no operar)
+        • Lote mínimo: 0.01
+        • Lote máximo: RISK_PER_TRADE × 3 del balance (3× el riesgo base)
+        • Si n_trades < KELLY_MIN_TRADES → vuelve a sizing estándar
+
+    Args:
+        balance:     Balance actual de la cuenta
+        sl_pips:     Distancia del Stop Loss en pips
+        symbol:      Símbolo para logging
+        win_rate:    Tasa de victorias histórica (0.0–1.0)
+        avg_rr:      Ratio R:R promedio del trade actual (e.g. 2.0)
+        n_trades:    Número de trades en el historial para este símbolo
+        point_value: Valor en dinero por pip (por defecto 1.0)
+
+    Returns:
+        Tamaño de lote redondeado a 2 decimales
+    """
+    min_trades = getattr(cfg, "KELLY_MIN_TRADES", 30)
+    fraction   = getattr(cfg, "KELLY_FRACTION",   0.25)
+    # Cap: nunca arriesgar más de 3× el riesgo base por trade.
+    # Con RISK_PER_TRADE=0.01 (1%): techo = 3% del balance por trade.
+    # Esto protege contra estimaciones de p/b demasiado optimistas.
+    max_risk   = cfg.RISK_PER_TRADE * 3.0
+
+    # Insuficientes datos históricos → sizing estándar
+    if n_trades < min_trades or win_rate <= 0 or avg_rr <= 0:
+        return get_lot_size(balance, sl_pips, symbol, point_value)
+
+    p = float(np.clip(win_rate, 0.01, 0.99))
+    q = 1.0 - p
+    b = float(max(avg_rr, 0.1))
+
+    # Kelly óptimo
+    f_star = (b * p - q) / b
+
+    if f_star <= 0:
+        # Kelly negativo → edge estadístico insuficiente → sizing estándar
+        log.info(
+            f"[risk/kelly] {symbol}: f*={f_star:.3f} ≤ 0 "
+            f"(WR={win_rate:.1%} RR={avg_rr:.2f}) → sizing estándar"
+        )
+        return get_lot_size(balance, sl_pips, symbol, point_value)
+
+    # Kelly fraccionado
+    f_actual    = float(np.clip(fraction * f_star, 0.0, max_risk))
+    risk_amount = balance * f_actual
+
+    if sl_pips <= 0 or point_value <= 0:
+        return 0.01
+
+    raw_lot = risk_amount / (sl_pips * point_value)
+    lot = round(max(0.01, raw_lot), 2)
+
+    log.info(
+        f"[risk/kelly] {symbol}: f*={f_star:.3f} → f_act={f_actual:.4f} "
+        f"(WR={win_rate:.1%} RR={avg_rr:.2f} trades={n_trades}) → lote={lot}"
+    )
     return lot
 
 

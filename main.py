@@ -47,7 +47,7 @@ from modules.neural_brain import (
     get_learning_report, get_pending_trades, get_memory_stats,
 )
 from modules.risk_manager import (
-    get_lot_size, calc_sl_tp, is_rr_valid,
+    get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
     is_session_valid, is_daily_loss_ok, get_rr,
     is_market_tradeable,
 )
@@ -1409,7 +1409,21 @@ def _execute_decision(
     sym_info = mt5.symbol_info(symbol)
     point    = sym_info.point if sym_info else 0.00001
     sl_pips  = abs(price - sl) / point
-    vol      = get_lot_size(balance, sl_pips, symbol)
+
+    # ── FASE 2: Kelly position sizing ────────────────────────────
+    # Usa Kelly fraccionado cuando hay suficientes trades históricos.
+    # Si no, vuelve automáticamente al sizing estándar.
+    mem_stats  = get_memory_stats()
+    sym_trades = mem_stats.get("total", 0)
+    win_rate   = mem_stats.get("win_rate", 0.0) / 100.0  # convertir % → fracción
+    vol = get_lot_size_kelly(
+        balance=balance,
+        sl_pips=sl_pips,
+        symbol=symbol,
+        win_rate=win_rate,
+        avg_rr=rr,
+        n_trades=sym_trades,
+    )
 
     hilbert  = ind.get("hilbert", {})
     h_signal = hilbert.get("signal", "NEUTRAL")

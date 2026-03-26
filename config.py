@@ -590,6 +590,19 @@ CONFLUENCE_MIN_SCORE         = 0.3   # Score mínimo absoluto para permitir entr
 # → el símbolo muestra "confluencia débil" pero aún se pregunta a Gemini.
 
 # ================================================================
+#  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING
+# ================================================================
+
+# Criterio de Kelly Fraccionado — para sizing dinámico basado en win rate
+# El bot usa Kelly solo cuando tiene suficientes trades históricos por símbolo.
+KELLY_FRACTION    = 0.25   # 25% del Kelly óptimo (cuarto de Kelly = conservador)
+                            # 0.0 = desactivar Kelly (usar always fixed risk)
+                            # 0.50 = half Kelly (más agresivo)
+                            # 0.25 = quarter Kelly (recomendado, resiste errores de estimación)
+KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para activar Kelly
+                            # Con menos trades, el Kelly se basa en estadística insuficiente
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60
