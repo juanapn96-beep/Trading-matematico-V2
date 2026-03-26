@@ -31,6 +31,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import Optional
 
+from modules.microstructure import compute_microstructure
+
 log = logging.getLogger(__name__)
 
 # ══════════════════════════════════════════════════════════════════
@@ -637,9 +639,19 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
         ctx["cpr"]           = cpr_vals
         ctx["candle_pattern"]= detect_candle_pattern(df)
 
-        # ── ALGORITMOS MATEMÁTICOS AVANZADOS ──
+        # ── ALGORITMOS MATEMÁTICOS AVANZADOS (parámetros adaptativos) ──
+        #
+        #  FASE 1: Los parámetros de Hilbert, Hurst y Kalman se ajustan
+        #  dinámicamente según la volatilidad reciente del activo (atr_pct).
+        #  Mercado volátil → ventanas más cortas/rápidas para capturar cambios.
+        #  Mercado tranquilo → ventanas más largas/estables para menor ruido.
 
-        hilbert = hilbert_transform(close)
+        atr_pct_now: float = ctx.get("atr_pct", 0.3)
+
+        # Hilbert: períodos mín/máx adaptativos
+        hil_min_p = 4  if atr_pct_now > 1.0 else 6
+        hil_max_p = 30 if atr_pct_now > 0.8 else 50
+        hilbert = hilbert_transform(close, min_period=hil_min_p, max_period=hil_max_p)
         ctx["hilbert"] = {
             "period":      hilbert.dominant_period,
             "phase":       hilbert.phase,
@@ -650,7 +662,9 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
             "description": hilbert.description,
         }
 
-        h_exp = hurst_exponent(close)
+        # Hurst: ventana max_lag adaptativa a la volatilidad
+        hurst_max_lag = 15 if atr_pct_now > 0.8 else (20 if atr_pct_now > 0.4 else 30)
+        h_exp = hurst_exponent(close, min_lag=2, max_lag=hurst_max_lag)
         ctx["hurst"] = round(h_exp, 3)
         ctx["hurst_regime"] = (
             "TENDENCIA" if h_exp > 0.6 else
@@ -658,7 +672,11 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
             "REVERSION"
         )
 
-        kalman_s = kalman_filter(close)
+        # Kalman: ruido de observación R y proceso Q adaptativos
+        # Mayor ATR% → mercado más ruidoso → R más alto → filtro más suave
+        kalman_R = max(0.005, min(0.10, atr_pct_now / 100.0))
+        kalman_Q = kalman_R * 0.01
+        kalman_s = kalman_filter(close, R=kalman_R, Q=kalman_Q)
         ctx["kalman_price"] = round(float(kalman_s.iloc[-1]), 4)
         ctx["kalman_trend"] = "ALCISTA" if kalman_s.iloc[-1] > kalman_s.iloc[-2] else "BAJISTA"
         ctx["kalman_slope"] = round(float(kalman_s.iloc[-1] - kalman_s.iloc[-5]), 4)
@@ -759,6 +777,87 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
         ctx["trend_votes"] = {"bull": bullish_votes, "bear": bearish_votes}
 
         ctx["price"] = round(float(price_now), 4)
+
+        # ══════════════════════════════════════════════════════════
+        #  PILAR 3 — MICROESTRUCTURA (FASE 1)
+        # ══════════════════════════════════════════════════════════
+        try:
+            micro     = compute_microstructure(df, price=float(price_now))
+            ctx["microstructure"] = micro.to_dict()
+        except Exception as micro_err:
+            log.debug(f"[indicators] Microstructure error en {symbol}: {micro_err}")
+            ctx["microstructure"] = {
+                "micro_score": 0.0, "micro_bias": "NEUTRAL",
+                "description": "Error en cálculo",
+            }
+
+        # ══════════════════════════════════════════════════════════
+        #  CONFLUENCIA — MATRIZ DE 3 PILARES (FASE 1)
+        #
+        #  Pesos: P1 (Estadístico) 40 % | P2 (Matemático) 30 % |
+        #          P3 (Microestructura)  30 %
+        #
+        #  Score total en [-3, +3]:
+        #  >= +1.0 → BULLISH | <= -1.0 → BEARISH | resto → NEUTRAL
+        #
+        #  sniper_aligned=True cuando los 3 pilares apuntan en la
+        #  misma dirección → entrada de alta probabilidad.
+        # ══════════════════════════════════════════════════════════
+        try:
+            # Pilar 1: Estadístico/Tendencia (de trend_votes)
+            p1_score = max(-3.0, min(3.0, float(bullish_votes - bearish_votes) / 2.0))
+
+            # Pilar 2: Matemático/Ciclos
+            hil_sig  = ctx.get("hilbert", {}).get("signal", "NEUTRAL")
+            p2_bull  = sum([
+                hil_sig in ("BUY_CYCLE", "LOCAL_MIN"),
+                ctx.get("kalman_trend")   == "ALCISTA",
+                ctx.get("fisher",   0.0)  <  -1.5,
+                ctx.get("cycle_phase")    == "SUELO",
+                ctx.get("hurst_regime")   == "TENDENCIA" and ctx.get("lr_trend") == "ALCISTA",
+                ctx.get("lr_r2",    0.0)  >   0.6 and ctx.get("lr_trend") == "ALCISTA",
+            ])
+            p2_bear  = sum([
+                hil_sig in ("SELL_CYCLE", "LOCAL_MAX"),
+                ctx.get("kalman_trend")   == "BAJISTA",
+                ctx.get("fisher",   0.0)  >   1.5,
+                ctx.get("cycle_phase")    == "TECHO",
+                ctx.get("hurst_regime")   == "TENDENCIA" and ctx.get("lr_trend") == "BAJISTA",
+                ctx.get("lr_r2",    0.0)  >   0.6 and ctx.get("lr_trend") == "BAJISTA",
+            ])
+            p2_score = max(-3.0, min(3.0, float(p2_bull - p2_bear) / 2.0))
+
+            # Pilar 3: Microestructura
+            p3_score = float(ctx.get("microstructure", {}).get("micro_score", 0.0))
+
+            # Weighted confluence
+            conf_total = round(0.40 * p1_score + 0.30 * p2_score + 0.30 * p3_score, 2)
+            conf_bias  = (
+                "BULLISH" if conf_total >=  1.0 else
+                "BEARISH" if conf_total <= -1.0 else
+                "NEUTRAL"
+            )
+
+            # Sniper alignment: all 3 pillars in same direction
+            sniper_aligned = (
+                (p1_score > 0 and p2_score > 0 and p3_score > 0) or
+                (p1_score < 0 and p2_score < 0 and p3_score < 0)
+            )
+
+            ctx["confluence"] = {
+                "p1_score":      round(p1_score,   2),
+                "p2_score":      round(p2_score,   2),
+                "p3_score":      round(p3_score,   2),
+                "total":         conf_total,
+                "bias":          conf_bias,
+                "sniper_aligned": sniper_aligned,
+            }
+        except Exception as conf_err:
+            log.debug(f"[indicators] Confluence error en {symbol}: {conf_err}")
+            ctx["confluence"] = {
+                "p1_score": 0.0, "p2_score": 0.0, "p3_score": 0.0,
+                "total": 0.0, "bias": "NEUTRAL", "sniper_aligned": False,
+            }
 
     except Exception as e:
         log.error(f"[indicators] Error en {symbol}: {e}", exc_info=True)

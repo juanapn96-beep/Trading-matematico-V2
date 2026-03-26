@@ -67,7 +67,10 @@ MLP_ACTIVATION        = 20   # ≥ 20 trades: activar MLP
 ENSEMBLE_ACTIVATION   = 50   # ≥ 50 trades: ensemble completo
 
 # ── Arquitectura MLP ────────────────────────────────────────────
-INPUT_DIM   = 32
+# FASE 2: INPUT_DIM expandido de 32 → 40 (+8 features Pilar 3)
+# Los pesos de modelos guardados con dim=32 serán reinicializados
+# automáticamente (from_dict los detecta por shape mismatch).
+INPUT_DIM   = 40
 HIDDEN1     = 64
 HIDDEN2     = 32
 HIDDEN3     = 16
@@ -130,6 +133,16 @@ class TradeFeatures:
     news_sentiment:     float   # -1→+1
     news_high_impact:   float   # 0/1
 
+    # ── GRUPO 5: Microestructura + Confluencia (8 features) — FASE 2 ──
+    micro_score_norm:       float   # micro_score / 3  → -1→+1
+    above_poc:              float   # +1 sobre POC, -1 bajo POC
+    in_value_area:          float   # 1 dentro de VA (VAL–VAH), 0 fuera
+    above_session_vwap:     float   # +1 / -1
+    session_vwap_dev_norm:  float   # dev % clipeado en [-2%, +2%] → -1→+1
+    fvg_bull_active:        float   # 1 si hay FVG bullish activo cercano, 0 si no
+    fvg_bear_active:        float   # 1 si hay FVG bearish activo cercano, 0 si no
+    confluence_total_norm:  float   # confluence_total / 3 → -1→+1
+
     def to_vector(self) -> np.ndarray:
         return np.array([
             # Grupo 1
@@ -144,6 +157,11 @@ class TradeFeatures:
             # Grupo 4
             self.in_strong_sr, self.dist_to_sr_norm, self.vwap_side, self.obv_trend_num,
             self.cmf_norm, self.mfi_norm, self.news_sentiment, self.news_high_impact,
+            # Grupo 5 — Microestructura + Confluencia (FASE 2)
+            self.micro_score_norm, self.above_poc, self.in_value_area,
+            self.above_session_vwap, self.session_vwap_dev_norm,
+            self.fvg_bull_active, self.fvg_bear_active,
+            self.confluence_total_norm,
         ], dtype=np.float32)
 
 
@@ -753,8 +771,16 @@ def _cosine_sim(a: np.ndarray, b: np.ndarray, weights: np.ndarray) -> float:
 # ════════════════════════════════════════════════════════════════
 
 def _trend_to_num(trend: str) -> float:
-    return {"ALCISTA_FUERTE": 1.0, "ALCISTA": 0.5, "LATERAL": 0.0,
-            "BAJISTA": -0.5, "BAJISTA_FUERTE": -1.0}.get(trend, 0.0)
+    # FASE 2: expanded to all 7 levels added in v6.2 (was only 5 levels)
+    return {
+        "ALCISTA_FUERTE":  1.00,
+        "ALCISTA":         0.67,
+        "LATERAL_ALCISTA": 0.33,
+        "LATERAL":         0.00,
+        "LATERAL_BAJISTA": -0.33,
+        "BAJISTA":         -0.67,
+        "BAJISTA_FUERTE":  -1.00,
+    }.get(trend, 0.0)
 
 def _hilbert_to_num(signal: str) -> float:
     return {"LOCAL_MIN": 1.0, "BUY_CYCLE": 0.5, "NEUTRAL": 0.0,
@@ -838,6 +864,25 @@ def build_features(
         mfi_norm           = float(ind.get("mfi", 50)) / 100,
         news_sentiment     = float(getattr(news_ctx, "avg_sentiment", 0)),
         news_high_impact   = 1.0 if getattr(news_ctx, "should_pause", False) else 0.0,
+
+        # Grupo 5 — Microestructura + Confluencia (FASE 2)
+        micro_score_norm      = float(np.clip(
+            ind.get("microstructure", {}).get("micro_score", 0.0) / 3.0,
+            -1.0, 1.0,
+        )),
+        above_poc             = 1.0 if ind.get("microstructure", {}).get("above_poc", True) else -1.0,
+        in_value_area         = 1.0 if ind.get("microstructure", {}).get("in_value_area", True) else 0.0,
+        above_session_vwap    = 1.0 if ind.get("microstructure", {}).get("above_session_vwap", True) else -1.0,
+        session_vwap_dev_norm = float(np.clip(
+            ind.get("microstructure", {}).get("session_vwap_dev", 0.0) / 2.0,
+            -1.0, 1.0,
+        )),
+        fvg_bull_active       = 1.0 if ind.get("microstructure", {}).get("fvg_bull") is not None else 0.0,
+        fvg_bear_active       = 1.0 if ind.get("microstructure", {}).get("fvg_bear") is not None else 0.0,
+        confluence_total_norm = float(np.clip(
+            ind.get("confluence", {}).get("total", 0.0) / 3.0,
+            -1.0, 1.0,
+        )),
     )
 
 
@@ -950,7 +995,8 @@ def _online_train(symbol: str):
         for feat_json, result, reward_val, ts in rows:
             try:
                 fd = json.loads(feat_json)
-                # Reconstruir vector de 32 features
+                # Reconstruir vector de 40 features (32 originales + 8 FASE 2)
+                # Los records viejos devuelven 0.0 para las 8 features nuevas → OK
                 vec = [
                     fd.get("rsi_norm", 0.5), fd.get("rsi_zone", 0),
                     fd.get("macd_direction", 0), fd.get("macd_hist_norm", 0),
@@ -968,6 +1014,15 @@ def _online_train(symbol: str):
                     fd.get("vwap_side", 0), fd.get("obv_trend_num", 0),
                     fd.get("cmf_norm", 0), fd.get("mfi_norm", 0.5),
                     fd.get("news_sentiment", 0), fd.get("news_high_impact", 0),
+                    # GRUPO 5 — Microestructura + Confluencia (FASE 2)
+                    fd.get("micro_score_norm",       0.0),
+                    fd.get("above_poc",              0.0),
+                    fd.get("in_value_area",          0.0),
+                    fd.get("above_session_vwap",     0.0),
+                    fd.get("session_vwap_dev_norm",  0.0),
+                    fd.get("fvg_bull_active",        0.0),
+                    fd.get("fvg_bear_active",        0.0),
+                    fd.get("confluence_total_norm",  0.0),
                 ]
                 if len(vec) < INPUT_DIM:
                     vec += [0.0] * (INPUT_DIM - len(vec))
@@ -1119,6 +1174,15 @@ def check_memory(
                 fd.get("vwap_side", 0), fd.get("obv_trend_num", 0),
                 fd.get("cmf_norm", 0), fd.get("mfi_norm", 0.5),
                 fd.get("news_sentiment", 0), fd.get("news_high_impact", 0),
+                # GRUPO 5 — Microestructura + Confluencia (FASE 2)
+                fd.get("micro_score_norm",       0.0),
+                fd.get("above_poc",              0.0),
+                fd.get("in_value_area",          0.0),
+                fd.get("above_session_vwap",     0.0),
+                fd.get("session_vwap_dev_norm",  0.0),
+                fd.get("fvg_bull_active",        0.0),
+                fd.get("fvg_bear_active",        0.0),
+                fd.get("confluence_total_norm",  0.0),
             ], dtype=np.float32)
 
             # Rellenar si faltan features

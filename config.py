@@ -1,8 +1,9 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — config.py  (v6.4 — FIXES EXHAUSTIVOS)         ║
+║   ZAR ULTIMATE BOT v6 — config.py  (v6.5 — ENV SECURIZATION)          ║
 ║                                                                          ║
-║   CAMBIOS v6.4:                                                         ║
+║   CAMBIOS v6.5:                                                         ║
+║   • FASE 0: Credenciales migradas a .env (python-dotenv)               ║
 ║   • BREAKEVEN_ATR_MULT: BE por ATR en vez de pips fijos                ║
 ║   • SYMBOL_COOLDOWN_SEC: cooldown entre trades del mismo símbolo       ║
 ║   • US500m min_hurst: 0.45→0.38 (índices operan con Hurst bajo)       ║
@@ -12,29 +13,50 @@
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
+import os
+import sys
+from dotenv import load_dotenv
+
+# Carga el archivo .env desde la raíz del proyecto (si existe)
+load_dotenv()
+
+
+def _require_env(name: str) -> str:
+    """Devuelve el valor de la variable de entorno o termina con error claro."""
+    value = os.environ.get(name, "")
+    if not value:
+        print(
+            f"❌  Variable de entorno requerida no configurada: {name}\n"
+            "    Copia .env.example a .env y rellena todas las credenciales.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    return value
+
+
 # ================================================================
 #  MT5 / EXNESS
 # ================================================================
-MT5_LOGIN    = 198237687
-MT5_PASSWORD = "Popitos00-"
-MT5_SERVER   = "Exness-MT5Trial11"
+MT5_LOGIN    = int(_require_env("MT5_LOGIN"))
+MT5_PASSWORD = _require_env("MT5_PASSWORD")
+MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
 
 # ================================================================
 #  GOOGLE GEMINI
 # ================================================================
-GEMINI_API_KEY = "AIzaSyB4g8YtbLagiwLf4FOmGgR4wCzcQAu44TQ"
+GEMINI_API_KEY = _require_env("GEMINI_API_KEY")
 
 # ================================================================
 #  TELEGRAM
 # ================================================================
-TELEGRAM_TOKEN   = "8742602191:AAGcLQ9f5VUM1t0L0OqFtTFSNlRFbtFoeME"
-TELEGRAM_CHAT_ID = "8683346604"
+TELEGRAM_TOKEN   = _require_env("TELEGRAM_TOKEN")
+TELEGRAM_CHAT_ID = _require_env("TELEGRAM_CHAT_ID")
 
 # ================================================================
 #  APIs EXTERNAS
 # ================================================================
-ALPHA_VANTAGE_KEY = "9JOTZ2ZSOVMFVAVS"
-FINNHUB_KEY       = "d6som81r01qoqoiqsng0d6som81r01qoqoiqsngg"
+ALPHA_VANTAGE_KEY = _require_env("ALPHA_VANTAGE_KEY")
+FINNHUB_KEY       = _require_env("FINNHUB_KEY")
 
 # ================================================================
 #  SÍMBOLOS — 12 ACTIVOS, SESIONES EXPANDIDAS 24/5
@@ -547,6 +569,45 @@ CALENDAR_HIGH_IMPACT_ONLY     = True
 #  FILTRO DINÁMICO DE CALIDAD DE MERCADO
 # ================================================================
 MARKET_ATR_MIN_PCT_OVERRIDE = {}
+
+# ================================================================
+#  FASE 1 — TERCER PILAR: MICROESTRUCTURA
+# ================================================================
+
+# Volume Profile: número de velas históricas y resolución del histograma
+MICROSTRUCTURE_VP_CANDLES    = 100   # Velas para construir el Volume Profile
+MICROSTRUCTURE_VP_BINS       = 50    # Buckets de precio del histograma
+
+# Fair Value Gaps: antigüedad máxima de FVGs considerados activos
+MICROSTRUCTURE_FVG_CANDLES   = 50    # Velas de lookback para detectar FVGs
+MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
+
+# Confluence Matrix: umbrales para el score ponderado de 3 pilares
+# [-3, +3] — mayor número = requisito más estricto para operar
+CONFLUENCE_MIN_SCORE         = 0.3   # Score mínimo absoluto para permitir entrada
+# (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
+# Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
+# → el símbolo muestra "confluencia débil" pero aún se pregunta a Gemini.
+
+# ================================================================
+#  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING
+# ================================================================
+
+# Criterio de Kelly Fraccionado — para sizing dinámico basado en win rate
+# El bot usa Kelly solo cuando tiene suficientes trades históricos por símbolo.
+KELLY_FRACTION    = 0.25   # 25% del Kelly óptimo (cuarto de Kelly = conservador)
+                            # 0.0 = desactivar Kelly (usar always fixed risk)
+                            # 0.50 = half Kelly (más agresivo)
+                            # 0.25 = quarter Kelly (recomendado, resiste errores de estimación)
+KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para activar Kelly
+                            # Con menos trades, el Kelly se basa en estadística insuficiente
+
+# Multiplicador del umbral duro de confluencia (pre-Gemini + post-Gemini gate).
+# Umbral efectivo = CONFLUENCE_MIN_SCORE × CONFLUENCE_HARD_GATE_MULT
+# Ejemplo con defaults: 0.3 × 2 = 0.6 sobre escala [-3, +3]
+# Aumentar → más permisivo (solo bloquea señales muy contradictorias)
+# Reducir  → más estricto (bloquea con menor contradicción de pilares)
+CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad)
 
 # ================================================================
 #  CICLO PRINCIPAL

@@ -37,6 +37,18 @@ def _session_opens_in(sym_cfg: dict) -> str:
     return "ahora" if diff == 0 else f"en {diff}h"
 
 
+# FASE 3: module-level constant (not recreated on every render() call)
+_TREND_ICONS: dict = {
+    "ALCISTA_FUERTE":  "⬆⬆",
+    "ALCISTA":         "⬆ ",
+    "LATERAL_ALCISTA": "↗ ",
+    "LATERAL":         "➡ ",
+    "LATERAL_BAJISTA": "↘ ",
+    "BAJISTA":         "⬇ ",
+    "BAJISTA_FUERTE":  "⬇⬇",
+}
+
+
 def render(
     symbols:           list,
     indicators_by_sym: dict,
@@ -109,11 +121,7 @@ def render(
         cycle_p = ind.get("cycle_phase", "?")
         min_h   = sym_cfg_data.get("min_hurst", 0.5)
 
-        trend_icon = {
-            "ALCISTA_FUERTE": "⬆⬆", "ALCISTA": "⬆ ",
-            "LATERAL":        "➡ ",
-            "BAJISTA":        "⬇ ", "BAJISTA_FUERTE": "⬇⬇",
-        }.get(trend, "? ")
+        trend_icon = _TREND_ICONS.get(trend, "? ")
 
         # S/R
         sr_txt = ""
@@ -144,10 +152,29 @@ def render(
               f"fase={hilbert.get('phase',0):>6.1f}°  "
               f"T={hilbert.get('period',0):.0f}v  │ {sr_txt}")
 
+        # ── Fila 4: Microestructura + Confluencia (FASE 1/3) ──────
+        micro = ind.get("microstructure", {})
+        conf  = ind.get("confluence", {})
+        micro_score = micro.get("micro_score", 0.0)
+        micro_score_icon = "🟢" if micro_score > 0.5 else ("🔴" if micro_score < -0.5 else "⚪")
+        poc_pos   = "▲POC" if micro.get("above_poc", True) else "▼POC"
+        svwap_pos = "▲SVWAP" if micro.get("above_session_vwap", True) else "▼SVWAP"
+        conf_total   = conf.get("total", 0.0)
+        sniper_tag   = "✅SNP" if conf.get("sniper_aligned") else "    "
+        conf_icon    = "🟢" if conf_total > 0.5 else ("🔴" if conf_total < -0.5 else "⚪")
+        l4 = (
+            f"   {micro_score_icon} M={micro_score:>+.1f} {poc_pos} {svwap_pos}  │  "
+            f"{conf_icon} Conf: P1={conf.get('p1_score',0):>+.1f} "
+            f"P2={conf.get('p2_score',0):>+.1f} "
+            f"P3={conf.get('p3_score',0):>+.1f} "
+            f"Tot={conf_total:>+.2f} {sniper_tag}"
+        )
+
         lines += [
             f"║  {l1:<{W-2}}║",
             f"║  {l2:<{W-2}}║",
             f"║  {l3:<{W-2}}║",
+            f"║  {l4:<{W-2}}║",
         ]
         if status_msg:
             lines.append(f"║  {('   Estado: ' + status_msg)[:W-2]:<{W-2}}║")

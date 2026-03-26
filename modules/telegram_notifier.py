@@ -25,6 +25,15 @@ def _esc(text: str) -> str:
     return html_mod.escape(str(text))
 
 
+def _score_icon(score: float) -> str:
+    """Emoji de color para un score numérico (🟢 positivo / 🔴 negativo / ⚪ neutro)."""
+    if score > 0.3:
+        return "🟢"
+    if score < -0.3:
+        return "🔴"
+    return "⚪"
+
+
 def _send(text: str, parse_mode: str = "HTML"):
     """
     Envía mensaje a Telegram en HTML.
@@ -90,7 +99,7 @@ def _icon(symbol: str) -> str:
 
 def notify_bot_started(balance: float, equity: float, memory_stats: dict, symbols: list):
     lines = [
-        "🤖 <b>ZAR ULTIMATE BOT v6.4 — INICIADO</b>",
+        "🤖 <b>ZAR ULTIMATE BOT v6 — INICIADO</b>",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
         f"💰 Balance: <code>${balance:,.2f}</code>",
         f"📊 Equity:  <code>${equity:,.2f}</code>",
@@ -100,19 +109,23 @@ def notify_bot_started(balance: float, equity: float, memory_stats: dict, symbol
         f"  Win Rate histórico:  <code>{memory_stats.get('win_rate', 0)}%</code>",
         f"  P&amp;L acumulado:       <code>${memory_stats.get('profit', 0):+.2f}</code>",
         "",
-        "🛠 <b>Fixes v6.4 activos:</b>",
-        "  ✅ Breakeven ATR-relativo (no pips fijos)",
-        "  ✅ Cooldown por símbolo tras apertura",
-        "  ✅ NAS100m / GER40m activados",
-        "  ✅ Gemini retry 503 con backoff",
-        "  ✅ EOD analysis 21:00 UTC",
-        "  ✅ Pips por instrumento",
+        "🏗 <b>Arquitectura activa:</b>",
+        "  ✅ FASE 0 — Securización (.env, _require_env)",
+        "  ✅ FASE 1 — Microestructura (Volume Profile, Session VWAP, FVG)",
+        "             Parámetros adaptativos (Hilbert/Hurst/Kalman vs ATR%)",
+        "             Confluencia 3 Pilares ponderada 40/30/30",
+        "  ✅ FASE 2 — Neural Brain v3 (40 features, Kelly Position Sizing)",
+        "             MLP + Cosine Memory + Attention (ensemble automático)",
+        "  ✅ FASE 3 — Confluence Hard Gate (pre+post Gemini)",
+        "             Dashboard v2 (fila microestructura) + Notifs. ricas",
         "",
-        "🧮 <b>Algoritmos activos:</b>",
+        "🧮 <b>Algoritmos:</b>",
         "  ✅ Transformada de Hilbert | Hurst | Kalman",
         "  ✅ Fourier | Fisher | Ciclo Adaptativo",
         "  ✅ 45+ indicadores | S/R multi-TF (6 métodos)",
         "  ✅ MLP neural + memoria coseno + attention",
+        "  ✅ Volume Profile (POC/VAH/VAL) | Session VWAP | FVGs",
+        "  ✅ Confluence Matrix (3 Pilares) | Kelly Position Sizing",
         "",
         "📡 <b>Activos monitoreados:</b>",
         "  " + " | ".join(f"<code>{s}</code>" for s in symbols),
@@ -131,7 +144,11 @@ def notify_trade_opened(
     volume: float, atr: float, rr: float, reason: str,
     ind: dict, hilbert: dict, hurst: float, fisher: float,
     memory_warn: str = "",
+    kelly_active: bool = False,
 ):
+    """
+    FASE 3: Enriquecido con sección de Microestructura + Confluencia + Kelly.
+    """
     icon = _icon(symbol)
     dir_icon = "🟢 BUY" if direction == "BUY" else "🔴 SELL"
     pips_sl  = abs(price - sl)
@@ -149,6 +166,30 @@ def notify_trade_opened(
     # FIX 10: Limitar reason a 200 chars ANTES de escapar
     reason_safe = _esc(reason[:200])
 
+    # ── Microestructura + Confluencia (FASE 1/3) ─────────────────
+    micro = ind.get("microstructure", {})
+    conf  = ind.get("confluence", {})
+
+    micro_score = micro.get("micro_score", 0.0)
+    micro_bias  = micro.get("micro_bias", "NEUTRAL")
+    poc         = micro.get("poc", 0.0)
+    poc_pos     = "SOBRE POC" if micro.get("above_poc", True) else "BAJO POC"
+    svwap       = micro.get("session_vwap", 0.0)
+    svwap_dev   = micro.get("session_vwap_dev", 0.0)
+    svwap_pos   = "sobre SVWAP" if micro.get("above_session_vwap", True) else "bajo SVWAP"
+    fvg_bull    = micro.get("fvg_bull")
+    fvg_bear    = micro.get("fvg_bear")
+    session_name = micro.get("session", "?")
+
+    conf_p1   = conf.get("p1_score", 0.0)
+    conf_p2   = conf.get("p2_score", 0.0)
+    conf_p3   = conf.get("p3_score", 0.0)
+    conf_tot  = conf.get("total", 0.0)
+    conf_bias = conf.get("bias", "NEUTRAL")
+    sniper    = conf.get("sniper_aligned", False)
+
+    # Score icon helpers are at module level: _score_icon()
+
     lines = [
         f"{icon} <b>OPERACIÓN ABIERTA — {_esc(symbol)}</b>",
         "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
@@ -157,7 +198,7 @@ def notify_trade_opened(
         f"🛑 SL: <code>{sl}</code>  ({pips_sl:.4f} pts)",
         f"✅ TP: <code>{tp}</code>  ({pips_tp:.4f} pts)",
         f"⚖️ R:R: <code>1:{rr:.2f}</code>",
-        f"📦 Vol: <code>{volume}</code>  |  ATR: <code>{atr:.4f}</code>",
+        f"📦 Vol: <code>{volume}</code>{'  <b>Kelly✓</b>' if kelly_active else ''}  |  ATR: <code>{atr:.4f}</code>",
         "",
         "🧮 <b>Algoritmos:</b>",
         f"  🌀 Hilbert: <code>{_esc(h_signal)}</code> | sine={h_sine:.3f} | fase={h_phase:.0f}° | T={h_period:.0f}v",
@@ -171,6 +212,22 @@ def notify_trade_opened(
         f"  Stoch K/D: <code>{ind.get('stoch_k',0):.1f}/{ind.get('stoch_d',0):.1f}</code>  |  BB: <code>{_esc(str(ind.get('bb_pos','?')))}</code>",
         f"  HA: <code>{_esc(str(ind.get('ha_trend','?')))}</code> ({ind.get('ha_streak',0)}v)  |  H1: <code>{_esc(str(ind.get('h1_trend','?')))}</code>",
         f"  SuperTrend: <code>{'ALCISTA' if ind.get('supertrend',0)==1 else 'BAJISTA'}</code>  |  VWAP: <code>{ind.get('vwap',0):.4f}</code>",
+        "",
+        "🔬 <b>Microestructura (P3):</b>",
+        f"  Score: <code>{micro_score:+.1f}</code> → {_esc(micro_bias)}  │  Sesión: <code>{_esc(session_name)}</code>",
+        f"  POC: <code>{poc:.4f}</code> — precio {_esc(poc_pos)}",
+        f"  S-VWAP: <code>{svwap:.4f}</code> — precio {_esc(svwap_pos)} ({svwap_dev:+.2f}%)",
+        (f"  FVG Bull: <code>{fvg_bull['low']:.4f}–{fvg_bull['high']:.4f}</code> (hace {fvg_bull['age']}v)"
+         if fvg_bull else "  FVG Bull: ninguno activo"),
+        (f"  FVG Bear: <code>{fvg_bear['low']:.4f}–{fvg_bear['high']:.4f}</code> (hace {fvg_bear['age']}v)"
+         if fvg_bear else "  FVG Bear: ninguno activo"),
+        "",
+        "⚡ <b>Confluencia 3 Pilares:</b>",
+        f"  P1 (Estad.): {_score_icon(conf_p1)} <code>{conf_p1:>+.2f}</code>  │  "
+        f"P2 (Matem.): {_score_icon(conf_p2)} <code>{conf_p2:>+.2f}</code>  │  "
+        f"P3 (Micro): {_score_icon(conf_p3)} <code>{conf_p3:>+.2f}</code>",
+        f"  TOTAL: {_score_icon(conf_tot)} <code>{conf_tot:>+.2f}</code> → {_esc(conf_bias)}  "
+        + ("│  ✅ <b>SNIPER ALIGNED</b>" if sniper else "│  ⚠️ Pilares en desacuerdo"),
         "",
         f"💡 <i>{reason_safe}</i>",
     ]

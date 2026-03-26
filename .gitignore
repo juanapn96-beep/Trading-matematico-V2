@@ -1,0 +1,45 @@
+# ============================================================
+#  ZAR ULTIMATE BOT v6 — .gitignore
+# ============================================================
+
+# Variables de entorno y credenciales (NUNCA commitear)
+.env
+
+# Caché de Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+
+# Base de datos de memoria del bot
+*.db
+memory/*.db
+
+# Archivos de log
+*.log
+
+# Distribuciones / empaquetado
+.Python
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Entornos virtuales
+.venv/
+venv/
+env/
+ENV/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
