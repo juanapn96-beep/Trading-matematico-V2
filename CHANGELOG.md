@@ -68,6 +68,29 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 18:10 UTC] - FASE 5: Equity Guard (protección de capital)
+
+### config.py
+- Añadido parámetro configurable:
+  - `EQUITY_GUARD_MIN_PCT` (default `70.0`)
+- Define el piso de equity (porcentaje del balance actual) bajo el cual se bloquean nuevas entradas.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado gate pre-señal en `_process_symbol(...)`:
+  - Si `equity < balance * (EQUITY_GUARD_MIN_PCT/100)`, el símbolo queda bloqueado para nuevas entradas.
+  - Se registra warning en log, estado de símbolo y `last_action`.
+  - No afecta gestión de posiciones ya abiertas (trailing/SL/TP siguen operando).
+- **[Agente: GitHub Copilot]**
+
+### modules/telegram_notifier.py
+- `notify_bot_started()` actualizado para listar explícitamente:
+  - `✅ FASE 4 — Policy Engine`
+  - `✅ FASE 5 — Equity Guard`
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
 
 ### main.py

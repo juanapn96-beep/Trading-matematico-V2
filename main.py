@@ -1114,6 +1114,18 @@ def _process_symbol(
 ):
     global last_action, ind_cache, sr_cache, symbol_status_cache
 
+    equity_guard_min_pct = float(getattr(cfg, "EQUITY_GUARD_MIN_PCT", 70.0))
+    equity_floor = balance * (equity_guard_min_pct / 100.0) if balance and balance > 0 else 0.0
+    if equity_floor > 0 and equity < equity_floor:
+        msg = (
+            f"🛡 Equity guard: {equity:,.2f} < {equity_floor:,.2f} "
+            f"({equity_guard_min_pct:.0f}% bal)"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.warning(f"[{symbol}] {msg} — nuevas entradas bloqueadas")
+        return
+
     # FIX 15: los límites de entrada no deben impedir calcular indicadores.
     # Si no, el dashboard queda en "Calculando indicadores..." y el trailing
     # stop deja de gestionarse justo cuando hay posiciones abiertas.

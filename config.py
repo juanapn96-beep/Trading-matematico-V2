@@ -639,6 +639,14 @@ POLICY_MIN_SCORE          = 0.45
 POLICY_MIN_CONF_BONUS     = 1
 
 # ================================================================
+#  FASE 5 — EQUITY GUARD (PROTECCIÓN DE CAPITAL)
+# ================================================================
+# Bloquea NUEVAS entradas cuando la equity cae por debajo de este
+# porcentaje del balance actual. No afecta la gestión de posiciones
+# ya abiertas (trailing/SL/TP siguen activos).
+EQUITY_GUARD_MIN_PCT      = 70.0
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60
