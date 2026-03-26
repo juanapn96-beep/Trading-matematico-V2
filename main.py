@@ -1197,6 +1197,8 @@ def _process_symbol(
             return
         else:
             memory_block_notified.pop(symbol, None)
+        # LATERAL path: direction unknown before Gemini — the post-Gemini gate
+        # in _execute_decision will apply the confluence veto after Gemini responds.
         context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
         decision = ask_gemini(context, sym_cfg)
         _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
@@ -1214,151 +1216,56 @@ def _process_symbol(
     else:
         memory_block_notified.pop(symbol, None)
 
+    # ── FASE 3: Confluence Gate pre-Gemini (directional path) ──────
+    if _apply_confluence_gate_pre(symbol, ind, mem_direction):
+        return
+
     context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
     decision = ask_gemini(context, sym_cfg)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
-    return
 
-    # ── 1. Verificar calidad de mercado ──────────────────────────
-    tradeable_basic, motivo_basic = is_market_tradeable(symbol, sym_cfg)
-    if not tradeable_basic:
-        _set_symbol_status(symbol, motivo_basic)
-        return
 
-    # FIX 3: cooldown por símbolo
-    now_ts = time.time()
-    last_open = last_trade_time.get(symbol, 0)
-    if now_ts - last_open < SYMBOL_COOLDOWN_SEC:
-        remaining = int(SYMBOL_COOLDOWN_SEC - (now_ts - last_open))
-        log.debug(f"[{symbol}] Cooldown activo — {remaining}s restantes")
-        return
+def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
+    """
+    FASE 3 — Confluence Hard Gate (pre-Gemini).
 
-    # ── 2. Límite por símbolo ─────────────────────────────────────
-    live_sym_positions = mt5.positions_get(symbol=symbol)
-    if live_sym_positions is None:
-        live_sym_positions = []
-    bot_sym_positions = [p for p in live_sym_positions if p.magic == cfg.MAGIC_NUMBER]
-    if len(bot_sym_positions) >= getattr(cfg, "MAX_OPEN_PER_SYMBOL", 1):
-        log.debug(f"[{symbol}] Ya tiene {len(bot_sym_positions)} posición(es) — skip")
-        return
+    Bloquea la llamada a Gemini si la Confluencia de 3 Pilares contradice
+    fuertemente la dirección esperada. Ahorra una llamada API y aplica el
+    equivalente en código a REGLA 15 del system prompt.
 
-    # ── 3. Límite global ──────────────────────────────────────────
-    total_open = get_open_positions_count_realtime()
-    if total_open >= cfg.MAX_OPEN_TRADES:
-        log.debug(f"[{symbol}] Límite global ({total_open}/{cfg.MAX_OPEN_TRADES}) — skip")
-        return
+    Umbral: conf_total < -(CONFLUENCE_MIN_SCORE × 2) para BUY
+            conf_total > +(CONFLUENCE_MIN_SCORE × 2) para SELL
 
-    # ── 4. Descargar velas ────────────────────────────────────────
-    df_entry = get_candles(symbol, cfg.TF_ENTRY, TF_CANDLES.get(cfg.TF_ENTRY, 300))
-    df_h1    = get_candles(symbol, cfg.TF_TREND, TF_CANDLES.get(cfg.TF_TREND, 150))
-    if df_entry is None or df_h1 is None or len(df_entry) < 60:
-        log.warning(f"[{symbol}] Datos insuficientes")
-        return
+    Con los defaults (CONFLUENCE_MIN_SCORE=0.3), el umbral = ±0.6 sobre
+    una escala de -3 a +3. Solo se bloquea cuando los 3 pilares apuntan
+    claramente contra la dirección (no en neutrales).
 
-    # ── 5. Calcular indicadores ───────────────────────────────────
-    ind = compute_all(df_h1, symbol, sym_cfg)
-    ind_cache[symbol] = ind
+    Retorna True si se debe bloquear (llamar 'return' en _process_symbol).
+    """
+    global last_action
 
-    # ── 5b. Filtro ATR ────────────────────────────────────────────
-    atr_now   = ind.get("atr", 0)
-    price_now = ind.get("price", 0)
-    tradeable_atr, motivo_atr = is_market_tradeable(symbol, sym_cfg, atr_now, price_now)
-    if not tradeable_atr:
-        log.info(f"[{symbol}] {motivo_atr}")
-        last_action = f"📉 {motivo_atr[:55]}"
-        return
+    conf_total = ind.get("confluence", {}).get("total", 0.0)
+    hard_thresh = (
+        getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)
+        * getattr(cfg, "CONFLUENCE_HARD_GATE_MULT", 2)
+    )
 
-    # ── 6. S/R multi-timeframe ────────────────────────────────────
-    dfs_by_tf = {}
-    for tf in sym_cfg.get("sr_timeframes", ["H1"]):
-        df_tf = get_candles(symbol, tf, TF_CANDLES.get(tf, 150))
-        if df_tf is not None:
-            dfs_by_tf[tf] = df_tf
-    sr_ctx = build_sr_context(dfs_by_tf, ind["price"], symbol, sym_cfg)
-    sr_cache[symbol] = sr_ctx
+    if direction == "BUY" and conf_total < -hard_thresh:
+        msg = f"⚡ Conf veta BUY ({conf_total:+.2f}) — pilares bajistas"
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} — Gemini no consultado")
+        return True
 
-    # ── 7. Calendario económico ───────────────────────────────────
-    pause_cal, cal_reason, cal_event, already_cal_notified = \
-        eco_calendar.should_pause_symbol(symbol, sym_cfg)
-    if pause_cal:
-        last_action = f"📅 Cal: {cal_reason[:55]}"
-        if not already_cal_notified and cal_event is not None:
-            _notify_calendar_pause_once(symbol, cal_event, sym_cfg)
-        log.info(f"[{symbol}] ⏸ Cal: {cal_reason[:60]}")
-        return
+    if direction == "SELL" and conf_total > hard_thresh:
+        msg = f"⚡ Conf veta SELL ({conf_total:+.2f}) — pilares alcistas"
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} — Gemini no consultado")
+        return True
 
-    cal_events_nearby = eco_calendar.get_events_for_symbol(symbol, sym_cfg, minutes_ahead=120)
-
-    # ── 8. Noticias RSS ───────────────────────────────────────────
-    now_ts_news = time.time()
-    if symbol not in news_cache or (now_ts_news - news_last_update.get(symbol, 0)) > cfg.NEWS_REFRESH_MIN * 60:
-        news_ctx = build_news_context(symbol, sym_cfg)
-        news_cache[symbol]       = news_ctx
-        news_last_update[symbol] = now_ts_news
-    else:
-        news_ctx = news_cache[symbol]
-
-    # ── 9. Pausa por noticias ─────────────────────────────────────
-    if news_ctx.should_pause:
-        last_action = f"📰 News pausa {symbol}"
-        _notify_news_pause_once(symbol, news_ctx.pause_reason, cfg.NEWS_PAUSE_MINUTES_BEFORE)
-        return
-    else:
-        news_pause_notified.pop(symbol, None)
-
-    # ── 10. Filtro Hurst mínimo ───────────────────────────────────
-    hurst_val = ind.get("hurst", 0.5)
-    min_hurst = sym_cfg.get("min_hurst", 0.40)
-    if hurst_val < min_hurst:
-        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
-        last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
-        return
-
-    # ── 11. Memoria neural ────────────────────────────────────────
-    h1_trend = ind.get("h1_trend", "LATERAL")
-    if "BAJISTA" in h1_trend:
-        mem_direction = "SELL"
-    elif "ALCISTA" in h1_trend:
-        mem_direction = "BUY"
-    else:
-        feat_buy  = build_features(symbol, "BUY",  ind, sr_ctx, news_ctx, sym_cfg)
-        feat_sell = build_features(symbol, "SELL", ind, sr_ctx, news_ctx, sym_cfg)
-        mem_buy   = check_memory(feat_buy,  symbol, "BUY",  sym_cfg)
-        mem_sell  = check_memory(feat_sell, symbol, "SELL", sym_cfg)
-        if mem_buy.should_block and mem_sell.should_block:
-            last_action = f"🧠 Memoria bloqueó {symbol}"
-            _notify_memory_block_once(symbol, mem_buy)
-            return
-        mem_check = mem_sell if mem_sell.confidence_adj > mem_buy.confidence_adj else mem_buy
-        features  = feat_buy if mem_check is mem_buy else feat_sell
-        if mem_check.should_block:
-            last_action = f"🧠 Memoria bloqueó {symbol}"
-            _notify_memory_block_once(symbol, mem_check)
-            return
-        else:
-            memory_block_notified.pop(symbol, None)
-        context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
-        decision = ask_gemini(context, sym_cfg)
-        _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
-                          mem_check, features, balance, df_entry)
-        return
-
-    features  = build_features(symbol, mem_direction, ind, sr_ctx, news_ctx, sym_cfg)
-    mem_check = check_memory(features, symbol, mem_direction, sym_cfg)
-
-    if mem_check.should_block:
-        last_action = f"🧠 Memoria bloqueó {symbol}"
-        _notify_memory_block_once(symbol, mem_check)
-        return
-    else:
-        memory_block_notified.pop(symbol, None)
-
-    # ── 12. Consultar Gemini ──────────────────────────────────────
-    context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
-    decision = ask_gemini(context, sym_cfg)
-    _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
-                      mem_check, features, balance, df_entry)
+    return False
 
 
 def _execute_decision(
@@ -1393,6 +1300,27 @@ def _execute_decision(
         _set_symbol_status(symbol, f"🚫 {filter_reason[:48]}")
         return
 
+    # ── FASE 3: Confluence Hard Gate (safety net post-Gemini) ─────
+    # Veta la orden si la respuesta de Gemini contradice la confluencia global.
+    # Captura el caso LATERAL donde la dirección no se conocía antes de Gemini.
+    conf_total  = ind.get("confluence", {}).get("total", 0.0)
+    conf_thresh = (
+        getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)
+        * getattr(cfg, "CONFLUENCE_HARD_GATE_MULT", 2)
+    )
+    if action == "BUY" and conf_total < -conf_thresh:
+        msg = f"⚡ Conf veta BUY post-Gemini ({conf_total:+.2f})"
+        log.info(f"[{symbol}] {msg}")
+        last_action = f"{msg} {symbol}"
+        _set_symbol_status(symbol, msg[:48])
+        return
+    if action == "SELL" and conf_total > conf_thresh:
+        msg = f"⚡ Conf veta SELL post-Gemini ({conf_total:+.2f})"
+        log.info(f"[{symbol}] {msg}")
+        last_action = f"{msg} {symbol}"
+        _set_symbol_status(symbol, msg[:48])
+        return
+
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         _set_symbol_status(symbol, "⚠️ Tick no disponible")
@@ -1416,6 +1344,8 @@ def _execute_decision(
     mem_stats  = get_memory_stats()
     sym_trades = mem_stats.get("total", 0)
     win_rate   = mem_stats.get("win_rate", 0.0) / 100.0  # convertir % → fracción
+    kelly_min_trades = getattr(cfg, "KELLY_MIN_TRADES", 30)
+    kelly_active     = sym_trades >= kelly_min_trades and win_rate > 0
     vol = get_lot_size_kelly(
         balance=balance,
         sl_pips=sl_pips,
@@ -1464,6 +1394,7 @@ def _execute_decision(
         hurst=ind.get("hurst", 0.5),
         fisher=ind.get("fisher", 0),
         memory_warn=mem_check.warning_msg,
+        kelly_active=kelly_active,
     )
 
     try:

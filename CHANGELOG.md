@@ -4,6 +4,63 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
+
+### main.py
+- **Eliminación de ~140 líneas de código muerto** (`_process_symbol`):
+  El cuerpo de `_process_symbol` terminaba con `return` en la línea 1221 pero el resto de
+  la función (líneas 1223–1362) era un bloque duplicado idéntico nunca alcanzado.
+  Eliminar este bloque muerto reduce el archivo en ~140 líneas sin cambiar ningún comportamiento.
+- **`_apply_confluence_gate_pre()` (nueva función helper)**:
+  Gate pre-Gemini que bloquea la consulta a la IA cuando la Confluencia 3 Pilares
+  contradice fuertemente la dirección esperada.
+  - Umbral: `conf_total < -(CONFLUENCE_MIN_SCORE × 2)` para BUY, viceversa para SELL
+  - Con defaults: `|conf_total| > 0.6` sobre escala `-3 a +3` (sólo bloquea cuando
+    el mercado es claramente opuesto — no en señales neutras)
+  - Ahorra una llamada a Gemini API por ciclo cuando el gate actúa
+  - Se aplica en la ruta directional (h1_trend ALCISTA/BAJISTA) antes de `build_context`
+  - La ruta LATERAL no usa este gate (dirección desconocida) — usa el post-Gemini gate
+- **Confluence Hard Gate post-Gemini** en `_execute_decision`:
+  Safety net que veta la orden DESPUÉS de que Gemini responde.
+  Captura el caso LATERAL donde la dirección no se conoce antes de consultar la IA.
+  Aplica la REGLA 15 del system prompt en código Python, no solo en el prompt.
+- **`kelly_active` flag** en `_execute_decision`: Se computa si el Kelly fraccionado
+  está activo (sym_trades ≥ KELLY_MIN_TRADES y win_rate > 0) y se pasa a la notificación.
+- **[Agente: GitHub Copilot]**
+
+### modules/dashboard.py
+- **Mapa de iconos de tendencia — 7 niveles** (FASE 3):
+  Antes solo mapeaba 5 niveles (faltaban LATERAL_ALCISTA ↗ y LATERAL_BAJISTA ↘).
+  Ahora todos los 7 niveles tienen icono propio:
+  `ALCISTA_FUERTE=⬆⬆ / ALCISTA=⬆  / LATERAL_ALCISTA=↗  / LATERAL=➡  /
+   LATERAL_BAJISTA=↘  / BAJISTA=⬇  / BAJISTA_FUERTE=⬇⬇`
+- **Fila 4 de microestructura + confluencia** por símbolo (FASE 3):
+  Cada símbolo ahora muestra 4 filas en vez de 3:
+  ```
+  l4: 🟢/🔴/⚪ M={micro_score} ▲/▼POC ▲/▼SVWAP │ Conf: P1={p1} P2={p2} P3={p3} Tot={total} ✅SNP/    
+  ```
+  - Micro Score con icono de color (🟢>+0.5, 🔴<-0.5, ⚪ neutro)
+  - Posición relativa al POC y Session VWAP
+  - Scores individuales P1/P2/P3 + total ponderado
+  - Flag `✅SNP` cuando los 3 pilares están alineados (sniper_aligned)
+  - Los datos provienen de `ind["microstructure"]` e `ind["confluence"]` (FASE 1)
+- **[Agente: GitHub Copilot]**
+
+### modules/telegram_notifier.py
+- **`notify_trade_opened()` v2** — Enriquecida con dos nuevas secciones:
+  - `🔬 Microestructura (P3)`: Micro Score + bias, sesión activa, POC con posición,
+    Session VWAP con desviación %, FVG Bull/Bear activos
+  - `⚡ Confluencia 3 Pilares`: scores individuales P1/P2/P3 con iconos de color,
+    TOTAL con bias, flag `✅ SNIPER ALIGNED` / `⚠️ Pilares en desacuerdo`
+  - Nuevo parámetro `kelly_active: bool` → muestra `<b>Kelly✓</b>` junto al volumen
+    cuando el sizing dinámico Kelly está activo (indicando que el lot size fue ajustado)
+- **`notify_bot_started()` v2** — Reemplaza lista de fixes v6.4 con descripción
+  de arquitectura por fases (FASE 0/1/2/3 activas), listando capacidades clave de
+  cada fase. Refleja el estado real del bot al arrancar.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 16:48 UTC] - FASE 2: Neural Brain v3 (Pilar 3 Integration) + Kelly Position Sizing
 
 ### modules/neural_brain.py

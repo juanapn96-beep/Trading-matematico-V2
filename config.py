@@ -602,6 +602,13 @@ KELLY_FRACTION    = 0.25   # 25% del Kelly óptimo (cuarto de Kelly = conservado
 KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para activar Kelly
                             # Con menos trades, el Kelly se basa en estadística insuficiente
 
+# Multiplicador del umbral duro de confluencia (pre-Gemini + post-Gemini gate).
+# Umbral efectivo = CONFLUENCE_MIN_SCORE × CONFLUENCE_HARD_GATE_MULT
+# Ejemplo con defaults: 0.3 × 2 = 0.6 sobre escala [-3, +3]
+# Aumentar → más permisivo (solo bloquea señales muy contradictorias)
+# Reducir  → más estricto (bloquea con menor contradicción de pilares)
+CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad)
+
 # ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
