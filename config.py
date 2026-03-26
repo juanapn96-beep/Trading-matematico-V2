@@ -647,6 +647,15 @@ POLICY_MIN_CONF_BONUS     = 1
 EQUITY_GUARD_MIN_PCT      = 70.0
 
 # ================================================================
+#  FASE 6 — DAILY LOSS GUARD (PROTECCIÓN INTRADÍA GLOBAL)
+# ================================================================
+# Reutiliza MAX_DAILY_LOSS como umbral de protección global.
+# Cuando se supera la pérdida diaria permitida:
+# - se pausan nuevas entradas en TODOS los símbolos
+# - se mantiene la gestión de posiciones abiertas
+# - se envía notificación Telegram con cooldown anti-spam
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60

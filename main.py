@@ -111,6 +111,7 @@ symbol_status_cache: dict  = {}
 news_pause_notified:   dict = {}
 memory_block_notified: dict = {}
 equity_guard_notified: dict = {}
+daily_loss_guard_notified: float = 0.0
 NOTIF_COOLDOWN_SEC = 1800
 
 # Cooldown por símbolo
@@ -1122,6 +1123,24 @@ def _notify_equity_guard_once(symbol: str, equity: float, equity_floor: float, m
         equity_guard_notified[symbol] = now_ts
 
 
+def _notify_daily_loss_guard_once(daily_pnl_now: float, balance_now: float, max_daily_loss_pct: float):
+    global daily_loss_guard_notified
+    now_ts = time.time()
+    if now_ts - daily_loss_guard_notified >= NOTIF_COOLDOWN_SEC:
+        daily_loss_cap = balance_now * max_daily_loss_pct if balance_now and balance_now > 0 else 0.0
+        telegram_send(
+            "\n".join([
+                "🛑 <b>DAILY LOSS GUARD ACTIVADO</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📉 P&amp;L diario: <code>${daily_pnl_now:,.2f}</code>",
+                f"🧱 Límite diario: <code>-${daily_loss_cap:,.2f}</code> ({max_daily_loss_pct*100:.1f}% balance)",
+                "⛔ Nuevas entradas pausadas temporalmente en todos los símbolos.",
+                f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+            ])
+        )
+        daily_loss_guard_notified = now_ts
+
+
 # ════════════════════════════════════════════════════════════════
 #  PROCESAMIENTO POR SÍMBOLO
 # ════════════════════════════════════════════════════════════════
@@ -1636,6 +1655,7 @@ def _execute_decision(
 
 def run():
     global cycle_count, last_action, ind_cache, sr_cache, symbol_status_cache, daily_start_balance
+    global daily_loss_guard_notified
 
     log.info("🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...")
     init_db()
@@ -1681,7 +1701,10 @@ def run():
             if not is_daily_loss_ok(daily_pnl, balance):
                 log.warning("[main] ⛔ Límite diario alcanzado")
                 last_action = "⛔ Límite diario alcanzado"
+                _notify_daily_loss_guard_once(daily_pnl, balance, float(getattr(cfg, "MAX_DAILY_LOSS", 0.05)))
                 time.sleep(cfg.LOOP_SLEEP_SEC * 5); continue
+            else:
+                daily_loss_guard_notified = 0.0
 
             open_positions = get_open_positions()
             open_tickets   = {p["ticket"] for p in open_positions}

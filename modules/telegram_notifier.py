@@ -120,6 +120,7 @@ def notify_bot_started(balance: float, equity: float, memory_stats: dict, symbol
         "             Dashboard v2 (fila microestructura) + Notifs. ricas",
         "  ✅ FASE 4 — Policy Engine (ranking WR/PF/Reward/Sample)",
         "  ✅ FASE 5 — Equity Guard (bloqueo de nuevas entradas por drawdown)",
+        "  ✅ FASE 6 — Daily Loss Guard (pausa global por pérdida diaria)",
         "",
         "🧮 <b>Algoritmos:</b>",
         "  ✅ Transformada de Hilbert | Hurst | Kalman",

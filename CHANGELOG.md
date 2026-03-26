@@ -92,6 +92,32 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 18:48 UTC] - FASE 6: Daily Loss Guard (protección intradía global)
+
+### main.py
+- Añadida notificación Telegram con cooldown para el guard global de pérdida diaria:
+  - Nueva función `_notify_daily_loss_guard_once(...)`.
+  - Mensaje incluye P&L diario actual, límite monetario diario y timestamp UTC.
+- Integrado en el loop principal:
+  - Cuando `is_daily_loss_ok(...)` falla, además de pausar nuevas entradas, ahora también
+    notifica por Telegram (anti-spam por `NOTIF_COOLDOWN_SEC`).
+  - Cuando el P&L vuelve a estar dentro del umbral, se resetea el estado de notificación
+    para permitir futuras alertas.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadido bloque documental **FASE 6 — DAILY LOSS GUARD** para trazar el alcance:
+  - Protección global intradía basada en `MAX_DAILY_LOSS`.
+  - No afecta la gestión de posiciones abiertas.
+- **[Agente: GitHub Copilot]**
+
+### modules/telegram_notifier.py
+- `notify_bot_started()` actualizado para listar explícitamente:
+  - `✅ FASE 6 — Daily Loss Guard (pausa global por pérdida diaria)`
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
 
 ### main.py
