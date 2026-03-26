@@ -110,6 +110,7 @@ symbol_status_cache: dict  = {}
 
 news_pause_notified:   dict = {}
 memory_block_notified: dict = {}
+equity_guard_notified: dict = {}
 NOTIF_COOLDOWN_SEC = 1800
 
 # Cooldown por símbolo
@@ -1104,6 +1105,23 @@ def _notify_memory_block_once(symbol: str, mem_check):
         memory_block_notified[symbol] = now_ts
 
 
+def _notify_equity_guard_once(symbol: str, equity: float, equity_floor: float, min_pct: float):
+    global equity_guard_notified
+    now_ts = time.time()
+    if now_ts - equity_guard_notified.get(symbol, 0) >= NOTIF_COOLDOWN_SEC:
+        telegram_send(
+            "\n".join([
+                f"🛡 <b>EQUITY GUARD ACTIVADO — {symbol}</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📉 Equity actual: <code>${equity:,.2f}</code>",
+                f"🧱 Piso requerido: <code>${equity_floor:,.2f}</code> ({min_pct:.0f}% balance)",
+                "⛔ Nuevas entradas bloqueadas temporalmente para este símbolo.",
+                f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+            ])
+        )
+        equity_guard_notified[symbol] = now_ts
+
+
 # ════════════════════════════════════════════════════════════════
 #  PROCESAMIENTO POR SÍMBOLO
 # ════════════════════════════════════════════════════════════════
@@ -1124,7 +1142,10 @@ def _process_symbol(
         _set_symbol_status(symbol, msg[:48])
         last_action = f"{msg} {symbol}"
         log.warning(f"[{symbol}] {msg} — nuevas entradas bloqueadas")
+        _notify_equity_guard_once(symbol, equity, equity_floor, equity_guard_min_pct)
         return
+    else:
+        equity_guard_notified.pop(symbol, None)
 
     # FIX 15: los límites de entrada no deben impedir calcular indicadores.
     # Si no, el dashboard queda en "Calculando indicadores..." y el trailing

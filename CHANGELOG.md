@@ -80,6 +80,7 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 - Integrado gate pre-señal en `_process_symbol(...)`:
   - Si `equity < balance * (EQUITY_GUARD_MIN_PCT/100)`, el símbolo queda bloqueado para nuevas entradas.
   - Se registra warning en log, estado de símbolo y `last_action`.
+  - **FASE 5.1**: notificación Telegram de Equity Guard con cooldown por símbolo para evitar spam (`_notify_equity_guard_once`).
   - No afecta gestión de posiciones ya abiertas (trailing/SL/TP siguen operando).
 - **[Agente: GitHub Copilot]**
 
