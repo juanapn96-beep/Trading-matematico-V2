@@ -571,6 +571,25 @@ CALENDAR_HIGH_IMPACT_ONLY     = True
 MARKET_ATR_MIN_PCT_OVERRIDE = {}
 
 # ================================================================
+#  FASE 1 — TERCER PILAR: MICROESTRUCTURA
+# ================================================================
+
+# Volume Profile: número de velas históricas y resolución del histograma
+MICROSTRUCTURE_VP_CANDLES    = 100   # Velas para construir el Volume Profile
+MICROSTRUCTURE_VP_BINS       = 50    # Buckets de precio del histograma
+
+# Fair Value Gaps: antigüedad máxima de FVGs considerados activos
+MICROSTRUCTURE_FVG_CANDLES   = 50    # Velas de lookback para detectar FVGs
+MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
+
+# Confluence Matrix: umbrales para el score ponderado de 3 pilares
+# [-3, +3] — mayor número = requisito más estricto para operar
+CONFLUENCE_MIN_SCORE         = 0.3   # Score mínimo absoluto para permitir entrada
+# (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
+# Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
+# → el símbolo muestra "confluencia débil" pero aún se pregunta a Gemini.
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60

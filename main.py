@@ -251,6 +251,33 @@ REGLA 13 — ANTI-CONTRA-TENDENCIA (NUEVO — CRÍTICO):
   El bot tuvo el 97% de trades en breakeven por entrar contra la tendencia.
   Solo operar cuando la dirección está ALINEADA con la mayoría de indicadores.
 
+REGLA 14 — PILAR 3: MICROESTRUCTURA (NUEVO — FASE 1):
+  Volume Profile (POC/VAH/VAL basado en tick-volume de Exness):
+    Precio > POC → sesgo alcista. Precio < POC → sesgo bajista.
+    Precio > VAH → breakout bullish (fuerte). Precio < VAL → breakdown bearish (fuerte).
+    Precio dentro del Value Area (VAL–VAH) → zona de equilibrio, menor edge.
+  Session VWAP (VWAP anclado por sesión UTC):
+    Precio sobre S-VWAP → sesgo alcista. Precio bajo S-VWAP → sesgo bajista.
+    Desviación S-VWAP > 0.5 % → posible reversión a VWAP antes del TP.
+  Fair Value Gaps (FVG / Imbalances):
+    FVG Bullish activo (fvg_bull): precio entrando en el gap desde arriba → SOPORTE. Favorece BUY.
+    FVG Bearish activo (fvg_bear): precio llegando al gap desde abajo → RESISTENCIA. Favorece SELL.
+    FVG mitigado: ya NO es soporte/resistencia válido.
+
+REGLA 15 — CONFLUENCIA DE 3 PILARES (SNIPER — NUEVO — FASE 1):
+  El bot evalúa 3 pilares independientes para cada señal:
+    P1 (Estadístico): votos de tendencia de indicadores técnicos.
+    P2 (Matemático):  Hilbert + Hurst + Kalman + Fisher + Ciclo Adaptativo.
+    P3 (Microestructura): POC + Session VWAP + FVG (calculado arriba).
+  confluence.total en [-3, +3]:
+    >= +1.0 → BULLISH fuerte. <= -1.0 → BEARISH fuerte. Entre → neutral/débil.
+  confluence.sniper_aligned = True → los 3 pilares apuntan en la MISMA dirección.
+    → Alta probabilidad de éxito. Aumentar confianza en 1 punto.
+  confluence.sniper_aligned = False → pilares en desacuerdo.
+    → Si conf.total < 0.5, reducir confianza. Si conf.total < 0.0 en la dirección → HOLD.
+  NUNCA ejecutar BUY si confluence.total < -0.5 (todos los pilares en contra).
+  NUNCA ejecutar SELL si confluence.total > 0.5 (todos los pilares en contra).
+
 FORMATO (JSON exacto, sin markdown, sin texto extra):
 {
   "decision": "BUY" | "SELL" | "HOLD",
@@ -396,6 +423,42 @@ def build_context(
         "",
         "── NOTICIAS RSS ──",
         format_news_for_prompt(news_ctx),
+        "",
+    ]
+
+    # ── PILAR 3: MICROESTRUCTURA ─────────────────────────────────
+    micro = ind.get("microstructure", {})
+    conf  = ind.get("confluence", {})
+
+    fvg_bull = micro.get("fvg_bull")
+    fvg_bear = micro.get("fvg_bear")
+    sess_vwap_dev = micro.get("session_vwap_dev", 0.0)
+    above_svwap   = micro.get("above_session_vwap", True)
+
+    lines += [
+        "── PILAR 3: MICROESTRUCTURA ──",
+        f"Volume Profile:  POC={micro.get('poc',0):.4f} | VAH={micro.get('vah',0):.4f} | VAL={micro.get('val',0):.4f}",
+        f"  Precio {'SOBRE' if micro.get('above_poc') else 'BAJO'} POC | "
+        f"{'DENTRO' if micro.get('in_value_area') else ('SOBRE VAH' if price > micro.get('vah', price) else 'BAJO VAL')} del Value Area",
+        f"Session VWAP ({micro.get('session','?')}): {micro.get('session_vwap',0):.4f} | "
+        f"Precio {'sobre' if above_svwap else 'bajo'} S-VWAP ({sess_vwap_dev:+.2f}%)",
+        f"FVG Bullish: " + (
+            f"activo en {fvg_bull['low']:.4f}–{fvg_bull['high']:.4f} (hace {fvg_bull['age']} velas)"
+            if fvg_bull else "ninguno activo cercano"
+        ),
+        f"FVG Bearish: " + (
+            f"activo en {fvg_bear['low']:.4f}–{fvg_bear['high']:.4f} (hace {fvg_bear['age']} velas)"
+            if fvg_bear else "ninguno activo cercano"
+        ),
+        f"Micro Score: {micro.get('micro_score', 0):+.1f} | Sesgo: {micro.get('micro_bias','NEUTRAL')}",
+        f"  Detalle: {micro.get('description','')}",
+        "",
+        "── CONFLUENCIA 3 PILARES ──",
+        f"P1 (Estadístico):  {conf.get('p1_score', 0):+.2f}",
+        f"P2 (Matemático):   {conf.get('p2_score', 0):+.2f}",
+        f"P3 (Microestr.):   {conf.get('p3_score', 0):+.2f}",
+        f"TOTAL (ponderado): {conf.get('total', 0):+.2f} → {conf.get('bias','NEUTRAL')}",
+        f"Sniper aligned:    {'✅ SÍ — todos los pilares alineados' if conf.get('sniper_aligned') else '⚠️  NO — pilares en desacuerdo'}",
         "",
         "── PARÁMETROS ──",
         f"SL={sym_cfg.get('sl_atr_mult','?')}×ATR | TP={sym_cfg.get('tp_atr_mult','?')}×ATR",
