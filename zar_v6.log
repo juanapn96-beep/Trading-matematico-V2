@@ -1,0 +1,175 @@
+2026-03-23 18:51:33,228 [INFO] 🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...
+2026-03-23 18:51:33,229 [INFO] [memory] DB v2 iniciada en memory\zar_memory.db
+2026-03-23 18:51:33,240 [INFO] [MT5] Conectado — Balance: $10,054.87 | Server: Exness-MT5Trial11
+2026-03-23 18:51:33,240 [INFO] [calendar] 📅 Cargando calendario económico...
+2026-03-23 18:51:33,240 [INFO] [calendar] 📅 Actualizando calendario económico...
+2026-03-23 18:51:34,317 [INFO] [calendar] ✅ 32 eventos cargados (próximos 14 días)
+2026-03-23 18:51:35,249 [INFO] ✅ Bot v6.5 iniciado | Balance=$10,054.87 | 12 símbolos | Modo 24/5 | Cooldown=300s | Trail: BE@1.5×ATR → Trail@2.5× → Trail@4× → Tight@TP80%
+2026-03-23 19:00:35,346 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=2.6% P&L=$+43.35
+2026-03-23 19:03:41,543 [INFO] 🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...
+2026-03-23 19:03:41,544 [INFO] [memory] DB v2 iniciada en memory\zar_memory.db
+2026-03-23 19:03:41,554 [INFO] [MT5] Conectado — Balance: $10,054.87 | Server: Exness-MT5Trial11
+2026-03-23 19:03:41,554 [INFO] [calendar] 📅 Cargando calendario económico...
+2026-03-23 19:03:41,554 [INFO] [calendar] 📅 Actualizando calendario económico...
+2026-03-23 19:03:42,732 [INFO] [calendar] ✅ 31 eventos cargados (próximos 14 días)
+2026-03-23 19:03:43,692 [INFO] ✅ Bot v6.5 iniciado | Balance=$10,054.87 | 12 símbolos | Modo 24/5 | Cooldown=300s | Trail: BE@1.5×ATR → Trail@2.5× → Trail@4× → Tight@TP80%
+2026-03-23 19:12:43,788 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 19:22:43,887 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 19:32:46,402 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 19:42:46,502 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 19:52:46,603 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 20:02:46,708 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 38 trades WR=100.0% P&L=$+43.35
+2026-03-23 20:08:14,038 [INFO] 🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...
+2026-03-23 20:08:14,039 [INFO] [memory] DB v2 iniciada en memory\zar_memory.db
+2026-03-23 20:08:14,049 [INFO] [MT5] Conectado — Balance: $10,054.87 | Server: Exness-MT5Trial11
+2026-03-23 20:08:14,049 [INFO] [calendar] 📅 Cargando calendario económico...
+2026-03-23 20:08:14,049 [INFO] [calendar] 📅 Actualizando calendario económico...
+2026-03-23 20:08:15,274 [INFO] [calendar] ✅ 31 eventos cargados (próximos 14 días)
+2026-03-23 20:08:16,203 [INFO] ✅ Bot v6.5 iniciado | Balance=$10,054.87 | 12 símbolos | Modo 24/5 | Cooldown=300s | Trail: BE@1.5×ATR → Trail@2.5× → Trail@4× → Tight@TP80%
+2026-03-23 20:08:19,293 [INFO] [news] US500m: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:08:19,294 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:08:36,402 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:08:36,403 [INFO] [US500m] 🤖 HOLD conf=9 | La tendencia H1 es bajista (2/6 bull, 4/6 bear), pero SuperTrend (ALCISTA) y Kal
+2026-03-23 20:08:38,912 [INFO] [news] EURUSDm: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:08:38,913 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:08:56,608 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:08:56,609 [INFO] [EURUSDm] 🤖 BUY conf=8 | El precio está exactamente sobre un soporte fuerte (1.1607, fuerza 10.0). El exp
+2026-03-23 20:08:56,770 [INFO] [orden] ✅ #460988376 BUY EURUSDm vol=0.28
+2026-03-23 20:08:58,875 [INFO] [chart] ✅ Gráfico generado para EURUSDm (356 KB)
+2026-03-23 20:09:01,932 [INFO] [chart] ✅ Imagen enviada a Telegram correctamente
+2026-03-23 20:09:01,933 [INFO] [EURUSDm] ✅ #460988376 BUY p=1.15933 sl=1.15573 tp=1.16653
+2026-03-23 20:09:04,335 [INFO] [news] GBPJPYm: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:09:04,335 [INFO] [GBPJPYm] Hurst 0.315 < 0.500 — HOLD
+2026-03-23 20:09:06,705 [INFO] [news] XAGUSDm: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:09:10,266 [INFO] [news] USOILm: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:09:10,266 [INFO] [USOILm] Hurst 0.373 < 0.380 — HOLD
+2026-03-23 20:09:12,659 [INFO] [news] BTCUSDm: hi=0 breaking=0 curs=[] pausa=False
+2026-03-23 20:09:12,661 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:09:14,910 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:09:14,911 [INFO] [BTCUSDm] 🤖 BUY conf=7 | La tendencia general es alcista (4/6 votos), y el precio está en un soporte fuer
+2026-03-23 20:09:15,130 [INFO] [orden] ✅ #460989543 BUY BTCUSDm vol=0.01
+2026-03-23 20:09:16,837 [INFO] [chart] ✅ Gráfico generado para BTCUSDm (354 KB)
+2026-03-23 20:09:19,266 [INFO] [chart] ✅ Imagen enviada a Telegram correctamente
+2026-03-23 20:09:19,268 [INFO] [BTCUSDm] ✅ #460989543 BUY p=70571.56 sl=67362.2548 tp=76990.1704
+2026-03-23 20:10:19,532 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:10:31,067 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:10:31,068 [INFO] [US500m] 🤖 HOLD conf=4 | La tendencia principal H1 es bajista y varios indicadores como MACD, Heiken Ashi
+2026-03-23 20:10:31,516 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:10:31,746 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:10:49,762 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:10:49,763 [INFO] [XAGUSDm] 🤖 HOLD conf=8 | A pesar de las fuertes señales de compra por sobreventa extrema (Fisher -3.800, 
+2026-03-23 20:10:49,984 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:11:07,614 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:11:07,615 [INFO] [USOILm] 🤖 HOLD conf=6 | La tendencia H1 es LATERAL con votos equilibrados (3 alcistas/3 bajistas). Aunqu
+2026-03-23 20:12:08,033 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:12:23,819 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:12:23,820 [INFO] [US500m] 🤖 HOLD conf=7 | Aunque la tendencia H1 es bajista y varios indicadores como MACD, Heiken Ashi y 
+2026-03-23 20:12:24,144 [INFO] [GBPJPYm] Hurst 0.321 < 0.500 — HOLD
+2026-03-23 20:12:24,303 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:12:42,813 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:12:42,815 [INFO] [XAGUSDm] 🤖 HOLD conf=5 | La estrategia GOLD_BETA_REVERSION muestra una fuerte señal de compra (Fisher < -
+2026-03-23 20:12:42,953 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:13:06,490 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:13:06,492 [INFO] [USOILm] 🤖 HOLD conf=6 | Aunque la tendencia H1 es BAJISTA y la mayoría de los indicadores clave (MACD, S
+2026-03-23 20:14:06,843 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:14:22,801 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:14:22,802 [INFO] [US500m] 🤖 HOLD conf=8 | La decisión de HOLD es obligatoria debido a la contradicción entre SuperTrend (A
+2026-03-23 20:14:23,089 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:14:23,242 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:14:32,866 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:14:32,867 [INFO] [XAGUSDm] 🤖 HOLD conf=5 | La tendencia H1 es LATERAL, y aunque el precio está en zona de S/R fuerte, exist
+2026-03-23 20:14:33,061 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:14:57,673 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:14:57,680 [INFO] [USOILm] 🤖 HOLD conf=7 | El precio actual se encuentra directamente en un soporte fuerte (90.218, fuerza 
+2026-03-23 20:15:58,056 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:16:00,103 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:16:00,104 [INFO] [US500m] 🤖 HOLD conf=5 | La tendencia H1 es BAJISTA y el Kalman indica BAJISTA, pero SuperTrend es ALCIST
+2026-03-23 20:16:00,384 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:16:00,519 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:16:23,392 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:16:23,400 [INFO] [XAGUSDm] 🤖 HOLD conf=7 | Aunque el Fisher (-3.800), Hilbert LOCAL_MIN y la fase de Ciclo en SUELO sugiere
+2026-03-23 20:16:23,554 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:16:39,577 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:16:39,578 [INFO] [USOILm] 🤖 HOLD conf=8 | El mercado se encuentra en una tendencia LATERAL en H1 con votos equilibrados (3
+2026-03-23 20:17:39,910 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:18:00,040 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:18:00,041 [INFO] [US500m] 🤖 HOLD conf=7 | El precio actual se encuentra en un soporte muy fuerte (6553.97, fuerza 10.0). A
+2026-03-23 20:18:00,331 [INFO] [GBPJPYm] Hurst 0.319 < 0.500 — HOLD
+2026-03-23 20:18:00,471 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:18:22,715 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:18:22,716 [INFO] [XAGUSDm] 🤖 HOLD conf=8 | La tendencia H1 es LATERAL y el precio no se encuentra EN un soporte o resistenc
+2026-03-23 20:18:22,868 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:18:41,160 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:18:41,161 [INFO] [USOILm] 🤖 HOLD conf=8 | El mercado se encuentra en una tendencia LATERAL y el precio está actualmente so
+2026-03-23 20:19:41,543 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:19:58,606 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:19:58,607 [INFO] [US500m] 🤖 HOLD conf=9 | La tendencia H1 es bajista, pero el precio se encuentra sobre un soporte fuerte 
+2026-03-23 20:19:58,889 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:19:59,024 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:20:16,123 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:20:16,124 [INFO] [XAGUSDm] 🤖 HOLD conf=9 | El mercado se encuentra en una tendencia LATERAL y el precio está cerca de una r
+2026-03-23 20:20:16,273 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:20:35,203 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:20:35,205 [INFO] [USOILm] 🤖 HOLD conf=4 | La tendencia H1 es LATERAL, y aunque el precio está en una zona de soporte fuert
+2026-03-23 20:21:35,579 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:21:56,158 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:21:56,159 [INFO] [US500m] 🤖 HOLD conf=9 | La decisión de HOLD es obligatoria según la Regla 3, ya que SuperTrend (ALCISTA)
+2026-03-23 20:21:56,440 [INFO] [GBPJPYm] Hurst 0.321 < 0.500 — HOLD
+2026-03-23 20:21:56,584 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:22:16,799 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:22:16,800 [INFO] [XAGUSDm] 🤖 HOLD conf=9 | La tendencia general es LATERAL, y aunque el precio está en un soporte fuerte (f
+2026-03-23 20:22:16,949 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:22:37,893 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:22:37,894 [INFO] [USOILm] 🤖 HOLD conf=8 | La tendencia H1 es LATERAL y el indicador Hurst (0.425) señala un régimen de REV
+2026-03-23 20:23:38,245 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:23:58,331 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:23:58,332 [INFO] [US500m] 🤖 HOLD conf=7 | La estrategia MOMENTUM_TREND exige que SuperTrend y Kalman confirmen la direcció
+2026-03-23 20:23:58,607 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:23:58,745 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:24:15,907 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:24:15,908 [INFO] [XAGUSDm] 🤖 HOLD conf=8 | A pesar de fuertes señales de compra como el precio en soporte (67.375, fuerza 1
+2026-03-23 20:24:16,060 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:24:35,997 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:24:35,999 [INFO] [USOILm] 🤖 HOLD conf=8 | La tendencia H1 es LATERAL y el precio se encuentra entre una resistencia y un s
+2026-03-23 20:25:36,106 [INFO] [stats] Hoy: 0 trades reales | ✅ 0W ❌ 0L ⚡ 0BE (excluidos) | WR=0% | P&L=$+0.00 | Mem: 40 trades WR=100.0% P&L=$+43.35
+2026-03-23 20:25:36,361 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:25:49,724 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:25:49,725 [INFO] [US500m] 🤖 HOLD conf=9 | La decisión es HOLD debido a la contradicción directa entre los indicadores clav
+2026-03-23 20:25:49,999 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:25:50,141 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:26:09,888 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:26:09,889 [INFO] [XAGUSDm] 🤖 HOLD conf=2 | La tendencia del mercado es LATERAL. A pesar de señales alcistas como un Fisher 
+2026-03-23 20:26:10,033 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:26:30,149 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:26:30,151 [INFO] [USOILm] 🤖 HOLD conf=8 | La tendencia en H1 es LATERAL, y el mercado presenta señales mixtas sin una dire
+2026-03-23 20:27:30,502 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:27:46,474 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:27:46,476 [INFO] [US500m] 🤖 HOLD conf=4 | Aunque la tendencia H1 es BAJISTA y varios indicadores de momentum confirman SEL
+2026-03-23 20:27:46,798 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:27:46,961 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:27:48,687 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:27:48,688 [INFO] [XAGUSDm] 🤖 HOLD conf=4 | El mercado se encuentra LATERAL con votos equilibrados (3/6). Aunque Hilbert ind
+2026-03-23 20:27:48,851 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:28:10,676 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:28:10,677 [INFO] [USOILm] 🤖 HOLD conf=8 | El mercado se encuentra en una tendencia LATERAL en H1, con el precio actualment
+2026-03-23 20:29:11,032 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:29:25,461 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:29:25,462 [INFO] [US500m] 🤖 HOLD conf=4 | La tendencia H1 es bajista y varios indicadores como MACD, Heiken Ashi y Kalman 
+2026-03-23 20:29:25,729 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:29:25,863 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:29:29,201 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:29:29,202 [INFO] [XAGUSDm] 🤖 BUY conf=7 | La plata se encuentra en un fuerte soporte (fuerza 10.0) y ha activado una señal
+2026-03-23 20:29:29,397 [INFO] [orden] ✅ #461028888 BUY XAGUSDm vol=0.02
+2026-03-23 20:29:31,481 [INFO] [chart] ✅ Gráfico generado para XAGUSDm (380 KB)
+2026-03-23 20:29:35,449 [INFO] [chart] ✅ Imagen enviada a Telegram correctamente
+2026-03-23 20:29:35,450 [INFO] [XAGUSDm] ✅ #461028888 BUY p=67.474 sl=63.34425 tp=75.7335
+2026-03-23 20:29:35,595 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:29:54,122 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:29:54,123 [INFO] [USOILm] 🤖 HOLD conf=8 | El mercado se encuentra en una tendencia LATERAL con señales mixtas, impidiendo 
+2026-03-23 20:30:54,483 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:31:09,549 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:31:09,550 [INFO] [US500m] 🤖 HOLD conf=1 | La estrategia MOMENTUM_TREND exige que SuperTrend y Kalman confirmen la direcció
+2026-03-23 20:31:09,874 [INFO] [GBPJPYm] Hurst 0.320 < 0.500 — HOLD
+2026-03-23 20:31:10,185 [INFO] AFC is enabled with max remote calls: 10.
+2026-03-23 20:31:27,543 [INFO] HTTP Request: POST https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent "HTTP/1.1 200 OK"
+2026-03-23 20:31:27,544 [INFO] [USOILm] 🤖 HOLD conf=5 | La tendencia H1 es LATERAL sin dirección clara. El precio se encuentra entre un 

@@ -1,0 +1,8 @@
+# ZAR ULTIMATE BOT v6 — dependencias
+# Instalar: pip install -r requirements.txt
+
+MetaTrader5>=5.0.4424
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+google-genai>=0.3.0
