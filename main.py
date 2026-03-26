@@ -45,6 +45,7 @@ from modules.neural_brain import (
     init_db, save_trade, update_trade_result,
     build_features, check_memory,
     get_learning_report, get_pending_trades, get_memory_stats,
+    derive_setup_id, derive_session_from_ind, evaluate_scorecard,
 )
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
@@ -352,6 +353,7 @@ def build_context(
     symbol: str, ind: dict, sr_ctx, news_ctx,
     mem_check, sym_cfg: dict,
     cal_events: list = None,
+    scorecard_check = None,
 ) -> str:
     price   = ind.get("price", 0)
     hilbert = ind.get("hilbert", {})
@@ -421,6 +423,24 @@ def build_context(
         f"Pérdidas similares: {mem_check.similar_losses} | Wins: {mem_check.similar_wins}",
         f"Detalle: {mem_check.warning_msg}",
         "",
+        "── SCORECARD JERÁRQUICO ──",
+    ]
+    if scorecard_check is not None:
+        lines += [
+            f"Setup: {scorecard_check.setup_id}",
+            f"Sesión: {scorecard_check.session} | Régimen: {scorecard_check.regime}",
+            f"Nivel: {scorecard_check.level} | Sample: {scorecard_check.sample_size}",
+            f"WR: {scorecard_check.win_rate:.1f}% | Mín WR: {scorecard_check.min_win_rate:.1f}%",
+            f"Bloquear setup: {scorecard_check.should_block} | {scorecard_check.reason}",
+            "",
+        ]
+    else:
+        lines += [
+            "Sin scorecard disponible",
+            "",
+        ]
+
+    lines += [
         "── NOTICIAS RSS ──",
         format_news_for_prompt(news_ctx),
         "",
@@ -1183,12 +1203,26 @@ def _process_symbol(
         feat_sell = build_features(symbol, "SELL", ind, sr_ctx, news_ctx, sym_cfg)
         mem_buy   = check_memory(feat_buy,  symbol, "BUY",  sym_cfg)
         mem_sell  = check_memory(feat_sell, symbol, "SELL", sym_cfg)
+        setup_buy = derive_setup_id(ind, "BUY")
+        setup_sell = derive_setup_id(ind, "SELL")
+        session_id = derive_session_from_ind(ind)
+        score_buy = evaluate_scorecard(symbol, setup_buy, session_id, mem_buy.regime)
+        score_sell = evaluate_scorecard(symbol, setup_sell, session_id, mem_sell.regime)
         if mem_buy.should_block and mem_sell.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
             _set_symbol_status(symbol, "🧠 Memoria bloqueó BUY y SELL")
             _notify_memory_block_once(symbol, mem_buy)
             return
+        if score_buy.should_block and score_sell.should_block:
+            msg = "🧮 Scorecard bloqueó BUY y SELL (historial pobre)"
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(
+                f"[{symbol}] {msg} | BUY={score_buy.reason} | SELL={score_sell.reason}"
+            )
+            return
         mem_check = mem_sell if mem_sell.confidence_adj > mem_buy.confidence_adj else mem_buy
+        selected_scorecard = score_sell if mem_check is mem_sell else score_buy
         features  = feat_buy if mem_check is mem_buy else feat_sell
         if mem_check.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
@@ -1197,9 +1231,14 @@ def _process_symbol(
             return
         else:
             memory_block_notified.pop(symbol, None)
+        # Scorecard en ruta LATERAL: se evaluará después de la respuesta Gemini
+        # porque la dirección final (BUY/SELL) aún no está definida.
         # LATERAL path: direction unknown before Gemini — the post-Gemini gate
         # in _execute_decision will apply the confluence veto after Gemini responds.
-        context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
+        context  = build_context(
+            symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
+            cal_events_nearby, selected_scorecard,
+        )
         decision = ask_gemini(context, sym_cfg)
         _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                           mem_check, features, balance, df_entry)
@@ -1207,6 +1246,14 @@ def _process_symbol(
 
     features  = build_features(symbol, mem_direction, ind, sr_ctx, news_ctx, sym_cfg)
     mem_check = check_memory(features, symbol, mem_direction, sym_cfg)
+    setup_id  = derive_setup_id(ind, mem_direction)
+    session_id = derive_session_from_ind(ind)
+    scorecard = evaluate_scorecard(
+        symbol=symbol,
+        setup_id=setup_id,
+        session=session_id,
+        regime=mem_check.regime,
+    )
 
     if mem_check.should_block:
         last_action = f"🧠 Memoria bloqueó {symbol}"
@@ -1216,11 +1263,21 @@ def _process_symbol(
     else:
         memory_block_notified.pop(symbol, None)
 
+    if scorecard.should_block:
+        msg = (
+            f"🧮 Scorecard vetó {mem_direction} "
+            f"(WR={scorecard.win_rate:.1f}% n={scorecard.sample_size})"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} | {scorecard.reason}")
+        return
+
     # ── FASE 3: Confluence Gate pre-Gemini (directional path) ──────
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
-    context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
+    context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby, scorecard)
     decision = ask_gemini(context, sym_cfg)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
@@ -1286,7 +1343,34 @@ def _execute_decision(
 
     log.info(f"[{symbol}] 🤖 {action} conf={confidence} | {reason[:80]}")
 
+    if action in ("BUY", "SELL"):
+        setup_id = derive_setup_id(ind, action)
+        session_id = derive_session_from_ind(ind)
+        scorecard = evaluate_scorecard(
+            symbol=symbol,
+            setup_id=setup_id,
+            session=session_id,
+            regime=mem_check.regime,
+        )
+        if scorecard.should_block:
+            msg = (
+                f"🧮 Scorecard vetó {action} "
+                f"(WR={scorecard.win_rate:.1f}% n={scorecard.sample_size})"
+            )
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(f"[{symbol}] {msg} | {scorecard.reason}")
+            return
+    else:
+        scorecard = None
+
     min_conf = sym_cfg.get("min_confidence", 6)
+    if (
+        scorecard is not None
+        and scorecard.sample_size >= scorecard.min_sample
+        and scorecard.win_rate < (scorecard.min_win_rate + 5.0)
+    ):
+        min_conf += int(getattr(cfg, "SCORECARD_MIN_CONF_BONUS", 1))
     if action == "HOLD" or confidence < min_conf:
         last_action = f"HOLD {symbol} conf={confidence} (min={min_conf})"
         _set_symbol_status(symbol, f"🤖 {action} conf={confidence}/{min_conf}")
@@ -1379,11 +1463,21 @@ def _execute_decision(
     _trail_stage[ticket] = 0
 
     direction_features = build_features(symbol, action, ind, sr_ctx, news_ctx, sym_cfg)
+    setup_id = derive_setup_id(ind, action)
+    session_id = derive_session_from_ind(ind)
+    risk_amount = balance * float(getattr(cfg, "RISK_PER_TRADE", 0.01))
     save_trade(
         ticket=ticket, symbol=symbol, direction=action,
         open_price=price, volume=vol,
         features=direction_features, reason_gemini=reason,
         hilbert_signal=h_signal, hurst_val=ind.get("hurst", 0.5),
+        setup_id=setup_id,
+        setup_score=ind.get("confluence", {}).get("total", 0.0),
+        session=session_id,
+        regime=mem_check.regime,
+        risk_amount=risk_amount,
+        sl=sl,
+        tp=tp,
     )
     tickets_en_memoria.add(ticket)
 

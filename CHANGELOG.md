@@ -4,6 +4,40 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 17:58 UTC] - FASE 3: Scorecard jerárquico por activo (pre-LLM gate)
+
+### config.py
+- Añadidos parámetros configurables de FASE 3 sin hardcode:
+  - `SCORECARD_LOOKBACK_TRADES`
+  - `SCORECARD_MIN_SAMPLE`
+  - `SCORECARD_MIN_WIN_RATE`
+  - `SCORECARD_MIN_CONF_BONUS`
+- Permiten ajustar lookback, muestra mínima, win-rate mínimo y endurecimiento de confianza desde configuración.
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- **Scorecard jerárquico implementado** con `ScorecardCheck` + `evaluate_scorecard()`:
+  1) `setup_id + session + regime`  
+  2) `setup_id + session`  
+  3) `setup_id`  
+  4) `symbol` (fallback)
+- El cálculo usa solo trades cerrados `WIN/LOSS` (excluye BE) y aplica bloqueo solo con muestra suficiente.
+- Añadidos helpers `derive_setup_id()` y `derive_session_from_ind()` para trazabilidad consistente por activo.
+- **Persistencia FASE 2 reforzada**: la tabla `trades` y sus migraciones ahora incluyen
+  `setup_id`, `setup_score`, `session`, `risk_amount`, `sl`, `tp`.
+- `save_trade()` actualizado para guardar el contexto enriquecido del setup en cada entrada.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado **filtro pre-LLM** en ruta direccional: si el scorecard del setup es pobre, bloquea antes de consultar Gemini.
+- Integrado gate equivalente en ruta lateral (BUY/SELL evaluados) y en post-Gemini como red de seguridad final.
+- `build_context()` ahora adjunta el bloque `SCORECARD JERÁRQUICO` para pasar esta métrica como contexto al modelo.
+- Endurecimiento dinámico de entrada: cuando el setup no está bloqueado pero su WR es marginal, sube `min_confidence` vía `SCORECARD_MIN_CONF_BONUS`.
+- `save_trade()` ahora registra en memoria: `setup_id`, `setup_score`, `session`, `regime`, `risk_amount`, `sl`, `tp`.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
 
 ### main.py

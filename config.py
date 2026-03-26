@@ -610,6 +610,18 @@ KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para a
 CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad)
 
 # ================================================================
+#  FASE 3 — SCORECARD JERÁRQUICO POR ACTIVO
+# ================================================================
+# Historial máximo (últimos trades cerrados por símbolo) para evaluar setup.
+SCORECARD_LOOKBACK_TRADES = 300
+# Muestra mínima (WIN+LOSS, BE excluido) para considerar estadística confiable.
+SCORECARD_MIN_SAMPLE      = 8
+# Win rate mínimo (%) exigido para permitir el setup (si hay muestra suficiente).
+SCORECARD_MIN_WIN_RATE    = 52.0
+# Endurecimiento dinámico: +1 punto de confianza mínima si scorecard es débil.
+SCORECARD_MIN_CONF_BONUS  = 1
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60

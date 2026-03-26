@@ -177,6 +177,21 @@ class MemoryCheck:
     ensemble_detail: str   = ""
 
 
+@dataclass
+class ScorecardCheck:
+    should_block:       bool
+    win_rate:           float
+    sample_size:        int
+    level:              str
+    key:                str
+    min_win_rate:       float
+    min_sample:         int
+    reason:             str
+    setup_id:           str
+    session:            str
+    regime:             str
+
+
 # ════════════════════════════════════════════════════════════════
 #  RED NEURONAL MLP — IMPLEMENTACIÓN NUMPY PURA
 # ════════════════════════════════════════════════════════════════
@@ -625,7 +640,13 @@ def init_db():
             hilbert_signal TEXT,
             hurst_val      REAL,
             reward         REAL,
-            regime         TEXT
+            regime         TEXT,
+            setup_id       TEXT,
+            setup_score    REAL,
+            session        TEXT,
+            risk_amount    REAL,
+            sl             REAL,
+            tp             REAL
         );
 
         CREATE TABLE IF NOT EXISTS feature_vectors (
@@ -662,6 +683,12 @@ def init_db():
     migrations = [
         ("trades",          "reward",          "REAL"),
         ("trades",          "regime",          "TEXT"),
+        ("trades",          "setup_id",        "TEXT"),
+        ("trades",          "setup_score",     "REAL"),
+        ("trades",          "session",         "TEXT"),
+        ("trades",          "risk_amount",     "REAL"),
+        ("trades",          "sl",              "REAL"),
+        ("trades",          "tp",              "REAL"),
         ("feature_vectors", "reward",          "REAL"),
         ("ml_models",       "attention_json",  "TEXT"),
         ("ml_models",       "ensemble_weights","TEXT"),
@@ -794,6 +821,20 @@ def _hurst_regime(hurst: float) -> float:
     return -1.0                       # reversión fuerte
 
 
+def derive_setup_id(ind: dict, direction: str) -> str:
+    """Construye un setup_id estable con dirección + sesgo de pilares."""
+    conf = ind.get("confluence", {})
+    micro = ind.get("microstructure", {})
+    h1 = ind.get("h1_trend", "LATERAL")
+    pillar_bias = conf.get("bias", "NEUTRAL")
+    micro_bias = micro.get("micro_bias", "NEUTRAL")
+    return f"{direction}|{h1}|{pillar_bias}|{micro_bias}"
+
+
+def derive_session_from_ind(ind: dict) -> str:
+    return ind.get("microstructure", {}).get("session", "UNKNOWN")
+
+
 def build_features(
     symbol: str, direction: str,
     ind: dict, sr_ctx, news_ctx,
@@ -895,21 +936,106 @@ def save_trade(
     open_price: float, volume: float,
     features: TradeFeatures, reason_gemini: str,
     hilbert_signal: str, hurst_val: float,
+    setup_id: Optional[str] = None,
+    setup_score: Optional[float] = None,
+    session: Optional[str] = None,
+    regime: Optional[str] = None,
+    risk_amount: Optional[float] = None,
+    sl: Optional[float] = None,
+    tp: Optional[float] = None,
 ) -> Optional[int]:
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     cur.execute("""
         INSERT OR IGNORE INTO trades
             (ticket, symbol, direction, open_price, volume,
-             opened_at, features_json, reason_gemini, hilbert_signal, hurst_val)
-        VALUES (?,?,?,?,?,?,?,?,?,?)
+             opened_at, features_json, reason_gemini, hilbert_signal, hurst_val,
+             setup_id, setup_score, session, regime, risk_amount, sl, tp)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (ticket, symbol, direction, open_price, volume,
           datetime.now(timezone.utc).isoformat(),
-          json.dumps(asdict(features)), reason_gemini, hilbert_signal, hurst_val))
+          json.dumps(asdict(features)), reason_gemini, hilbert_signal, hurst_val,
+          setup_id, setup_score, session, regime, risk_amount, sl, tp))
     trade_id = cur.lastrowid
     con.commit()
     con.close()
     return trade_id
+
+
+def evaluate_scorecard(
+    symbol: str,
+    setup_id: str,
+    session: str,
+    regime: str,
+) -> ScorecardCheck:
+    """
+    FASE 3: scorecard jerárquico por símbolo.
+    Prioridad de matching:
+      1) setup + session + regime
+      2) setup + session
+      3) setup
+      4) symbol (fallback global)
+    """
+    lookback = int(getattr(cfg, "SCORECARD_LOOKBACK_TRADES", 300))
+    min_sample = int(getattr(cfg, "SCORECARD_MIN_SAMPLE", 8))
+    min_wr = float(getattr(cfg, "SCORECARD_MIN_WIN_RATE", 52.0))
+
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    rows = cur.execute("""
+        SELECT setup_id, session, regime, result
+        FROM trades
+        WHERE symbol=?
+          AND result IN ('WIN','LOSS')
+        ORDER BY id DESC
+        LIMIT ?
+    """, (symbol, lookback)).fetchall()
+    con.close()
+
+    def _compute(scope_rows, level_name, key_name):
+        sample = len(scope_rows)
+        wins = sum(1 for r in scope_rows if r[3] == "WIN")
+        wr = (wins / sample * 100.0) if sample > 0 else 0.0
+        return sample, wr, level_name, key_name
+
+    candidates = []
+    rows_l1 = [r for r in rows if r[0] == setup_id and r[1] == session and r[2] == regime]
+    candidates.append(_compute(rows_l1, "L1_SETUP_SESSION_REGIME", f"{setup_id}|{session}|{regime}"))
+    rows_l2 = [r for r in rows if r[0] == setup_id and r[1] == session]
+    candidates.append(_compute(rows_l2, "L2_SETUP_SESSION", f"{setup_id}|{session}"))
+    rows_l3 = [r for r in rows if r[0] == setup_id]
+    candidates.append(_compute(rows_l3, "L3_SETUP", setup_id))
+    candidates.append(_compute(rows, "L4_SYMBOL", symbol))
+
+    chosen = next((c for c in candidates if c[0] >= min_sample), candidates[-1])
+    sample, win_rate, level, key = chosen
+
+    if sample < min_sample:
+        should_block = False
+        reason = (
+            f"Scorecard {level}: muestra insuficiente ({sample}/{min_sample}) "
+            "→ fallback permisivo"
+        )
+    else:
+        should_block = win_rate < min_wr
+        reason = (
+            f"Scorecard {level}: WR={win_rate:.1f}% sample={sample} "
+            f"(mín WR={min_wr:.1f}%)"
+        )
+
+    return ScorecardCheck(
+        should_block=should_block,
+        win_rate=round(win_rate, 1),
+        sample_size=sample,
+        level=level,
+        key=key,
+        min_win_rate=min_wr,
+        min_sample=min_sample,
+        reason=reason,
+        setup_id=setup_id,
+        session=session,
+        regime=regime,
+    )
 
 
 # ════════════════════════════════════════════════════════════════
