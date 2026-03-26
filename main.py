@@ -45,6 +45,8 @@ from modules.neural_brain import (
     init_db, save_trade, update_trade_result,
     build_features, check_memory,
     get_learning_report, get_pending_trades, get_memory_stats,
+    derive_setup_id, derive_session_from_ind, evaluate_scorecard,
+    evaluate_policy,
 )
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
@@ -108,6 +110,8 @@ symbol_status_cache: dict  = {}
 
 news_pause_notified:   dict = {}
 memory_block_notified: dict = {}
+equity_guard_notified: dict = {}
+daily_loss_guard_notified: float = 0.0
 NOTIF_COOLDOWN_SEC = 1800
 
 # Cooldown por símbolo
@@ -352,6 +356,8 @@ def build_context(
     symbol: str, ind: dict, sr_ctx, news_ctx,
     mem_check, sym_cfg: dict,
     cal_events: list = None,
+    scorecard_check = None,
+    policy_check = None,
 ) -> str:
     price   = ind.get("price", 0)
     hilbert = ind.get("hilbert", {})
@@ -421,6 +427,42 @@ def build_context(
         f"Pérdidas similares: {mem_check.similar_losses} | Wins: {mem_check.similar_wins}",
         f"Detalle: {mem_check.warning_msg}",
         "",
+        "── SCORECARD JERÁRQUICO ──",
+    ]
+    if scorecard_check is not None:
+        lines += [
+            f"Setup: {scorecard_check.setup_id}",
+            f"Sesión: {scorecard_check.session} | Régimen: {scorecard_check.regime}",
+            f"Nivel: {scorecard_check.level} | Sample: {scorecard_check.sample_size}",
+            f"WR: {scorecard_check.win_rate:.1f}% | Mín WR: {scorecard_check.min_win_rate:.1f}%",
+            f"Bloquear setup: {scorecard_check.should_block} | {scorecard_check.reason}",
+            "",
+        ]
+    else:
+        lines += [
+            "Sin scorecard disponible",
+            "",
+        ]
+
+    lines += [
+        "── POLICY ENGINE ──",
+    ]
+    if policy_check is not None:
+        lines += [
+            f"Dirección candidata: {policy_check.direction}",
+            f"Policy score: {policy_check.policy_score:.3f} | Block: {policy_check.should_block}",
+            f"WR: {policy_check.win_rate:.1f}% | PF: {policy_check.profit_factor:.2f} | "
+            f"AvgR: {policy_check.avg_reward:+.3f} | n={policy_check.sample_size}",
+            f"Detalle: {policy_check.reason}",
+            "",
+        ]
+    else:
+        lines += [
+            "Sin policy check disponible",
+            "",
+        ]
+
+    lines += [
         "── NOTICIAS RSS ──",
         format_news_for_prompt(news_ctx),
         "",
@@ -1064,6 +1106,41 @@ def _notify_memory_block_once(symbol: str, mem_check):
         memory_block_notified[symbol] = now_ts
 
 
+def _notify_equity_guard_once(symbol: str, equity: float, equity_floor: float, min_pct: float):
+    global equity_guard_notified
+    now_ts = time.time()
+    if now_ts - equity_guard_notified.get(symbol, 0) >= NOTIF_COOLDOWN_SEC:
+        telegram_send(
+            "\n".join([
+                f"🛡 <b>EQUITY GUARD ACTIVADO — {symbol}</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📉 Equity actual: <code>${equity:,.2f}</code>",
+                f"🧱 Piso requerido: <code>${equity_floor:,.2f}</code> ({min_pct:.0f}% balance)",
+                "⛔ Nuevas entradas bloqueadas temporalmente para este símbolo.",
+                f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+            ])
+        )
+        equity_guard_notified[symbol] = now_ts
+
+
+def _notify_daily_loss_guard_once(daily_pnl_now: float, balance_now: float, max_daily_loss_pct: float):
+    global daily_loss_guard_notified
+    now_ts = time.time()
+    if now_ts - daily_loss_guard_notified >= NOTIF_COOLDOWN_SEC:
+        daily_loss_cap = balance_now * max_daily_loss_pct if balance_now and balance_now > 0 else 0.0
+        telegram_send(
+            "\n".join([
+                "🛑 <b>DAILY LOSS GUARD ACTIVADO</b>",
+                "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                f"📉 P&amp;L diario: <code>${daily_pnl_now:,.2f}</code>",
+                f"🧱 Límite diario: <code>-${daily_loss_cap:,.2f}</code> ({max_daily_loss_pct*100:.1f}% balance)",
+                "⛔ Nuevas entradas pausadas temporalmente en todos los símbolos.",
+                f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+            ])
+        )
+        daily_loss_guard_notified = now_ts
+
+
 # ════════════════════════════════════════════════════════════════
 #  PROCESAMIENTO POR SÍMBOLO
 # ════════════════════════════════════════════════════════════════
@@ -1073,6 +1150,21 @@ def _process_symbol(
     open_positions: list, balance: float, equity: float,
 ):
     global last_action, ind_cache, sr_cache, symbol_status_cache
+
+    equity_guard_min_pct = float(getattr(cfg, "EQUITY_GUARD_MIN_PCT", 70.0))
+    equity_floor = balance * (equity_guard_min_pct / 100.0) if balance and balance > 0 else 0.0
+    if equity_floor > 0 and equity < equity_floor:
+        msg = (
+            f"🛡 Equity guard: {equity:,.2f} < {equity_floor:,.2f} "
+            f"({equity_guard_min_pct:.0f}% bal)"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.warning(f"[{symbol}] {msg} — nuevas entradas bloqueadas")
+        _notify_equity_guard_once(symbol, equity, equity_floor, equity_guard_min_pct)
+        return
+    else:
+        equity_guard_notified.pop(symbol, None)
 
     # FIX 15: los límites de entrada no deben impedir calcular indicadores.
     # Si no, el dashboard queda en "Calculando indicadores..." y el trailing
@@ -1183,13 +1275,42 @@ def _process_symbol(
         feat_sell = build_features(symbol, "SELL", ind, sr_ctx, news_ctx, sym_cfg)
         mem_buy   = check_memory(feat_buy,  symbol, "BUY",  sym_cfg)
         mem_sell  = check_memory(feat_sell, symbol, "SELL", sym_cfg)
+        setup_buy = derive_setup_id(ind, "BUY")
+        setup_sell = derive_setup_id(ind, "SELL")
+        session_id = derive_session_from_ind(ind)
+        score_buy = evaluate_scorecard(symbol, setup_buy, session_id, mem_buy.regime)
+        score_sell = evaluate_scorecard(symbol, setup_sell, session_id, mem_sell.regime)
+        policy_buy = evaluate_policy(symbol, "BUY", setup_buy, session_id, mem_buy.regime)
+        policy_sell = evaluate_policy(symbol, "SELL", setup_sell, session_id, mem_sell.regime)
         if mem_buy.should_block and mem_sell.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
             _set_symbol_status(symbol, "🧠 Memoria bloqueó BUY y SELL")
             _notify_memory_block_once(symbol, mem_buy)
             return
-        mem_check = mem_sell if mem_sell.confidence_adj > mem_buy.confidence_adj else mem_buy
-        features  = feat_buy if mem_check is mem_buy else feat_sell
+        if score_buy.should_block and score_sell.should_block:
+            msg = "🧮 Scorecard bloqueó BUY y SELL (historial pobre)"
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(
+                f"[{symbol}] {msg} | BUY={score_buy.reason} | SELL={score_sell.reason}"
+            )
+            return
+        candidates = [
+            ("BUY", feat_buy, mem_buy, score_buy, policy_buy),
+            ("SELL", feat_sell, mem_sell, score_sell, policy_sell),
+        ]
+        viable = [c for c in candidates if not c[2].should_block and not c[3].should_block and not c[4].should_block]
+        if not viable:
+            msg = "🧮 Policy/Scorecard bloqueó candidatos BUY y SELL"
+            _set_symbol_status(symbol, msg[:48])
+            last_action = f"{msg} {symbol}"
+            log.info(
+                f"[{symbol}] {msg} | "
+                f"BUY={policy_buy.reason} | SELL={policy_sell.reason}"
+            )
+            return
+        selected = max(viable, key=lambda x: (x[4].policy_score, x[2].confidence_adj))
+        _, features, mem_check, selected_scorecard, selected_policy = selected
         if mem_check.should_block:
             last_action = f"🧠 Memoria bloqueó {symbol}"
             _set_symbol_status(symbol, f"🧠 {mem_check.warning_msg[:48]}")
@@ -1197,9 +1318,14 @@ def _process_symbol(
             return
         else:
             memory_block_notified.pop(symbol, None)
+        # Scorecard en ruta LATERAL: se evaluará después de la respuesta Gemini
+        # porque la dirección final (BUY/SELL) aún no está definida.
         # LATERAL path: direction unknown before Gemini — the post-Gemini gate
         # in _execute_decision will apply the confluence veto after Gemini responds.
-        context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
+        context  = build_context(
+            symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
+            cal_events_nearby, selected_scorecard, selected_policy,
+        )
         decision = ask_gemini(context, sym_cfg)
         _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                           mem_check, features, balance, df_entry)
@@ -1207,6 +1333,21 @@ def _process_symbol(
 
     features  = build_features(symbol, mem_direction, ind, sr_ctx, news_ctx, sym_cfg)
     mem_check = check_memory(features, symbol, mem_direction, sym_cfg)
+    setup_id  = derive_setup_id(ind, mem_direction)
+    session_id = derive_session_from_ind(ind)
+    scorecard = evaluate_scorecard(
+        symbol=symbol,
+        setup_id=setup_id,
+        session=session_id,
+        regime=mem_check.regime,
+    )
+    policy = evaluate_policy(
+        symbol=symbol,
+        direction=mem_direction,
+        setup_id=setup_id,
+        session=session_id,
+        regime=mem_check.regime,
+    )
 
     if mem_check.should_block:
         last_action = f"🧠 Memoria bloqueó {symbol}"
@@ -1216,11 +1357,34 @@ def _process_symbol(
     else:
         memory_block_notified.pop(symbol, None)
 
+    if scorecard.should_block:
+        msg = (
+            f"🧮 Scorecard vetó {mem_direction} "
+            f"(WR={scorecard.win_rate:.1f}% n={scorecard.sample_size})"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} | {scorecard.reason}")
+        return
+
+    if policy.should_block:
+        msg = (
+            f"📉 Policy vetó {mem_direction} "
+            f"(score={policy.policy_score:.3f} n={policy.sample_size})"
+        )
+        _set_symbol_status(symbol, msg[:48])
+        last_action = f"{msg} {symbol}"
+        log.info(f"[{symbol}] {msg} | {policy.reason}")
+        return
+
     # ── FASE 3: Confluence Gate pre-Gemini (directional path) ──────
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
-    context  = build_context(symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg, cal_events_nearby)
+    context  = build_context(
+        symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
+        cal_events_nearby, scorecard, policy,
+    )
     decision = ask_gemini(context, sym_cfg)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
@@ -1286,7 +1450,57 @@ def _execute_decision(
 
     log.info(f"[{symbol}] 🤖 {action} conf={confidence} | {reason[:80]}")
 
+    if action in ("BUY", "SELL"):
+        setup_id = derive_setup_id(ind, action)
+        session_id = derive_session_from_ind(ind)
+        scorecard = evaluate_scorecard(
+            symbol=symbol,
+            setup_id=setup_id,
+            session=session_id,
+            regime=mem_check.regime,
+        )
+        policy = evaluate_policy(
+            symbol=symbol,
+            direction=action,
+            setup_id=setup_id,
+            session=session_id,
+            regime=mem_check.regime,
+        )
+        if scorecard.should_block:
+            msg = (
+                f"🧮 Scorecard vetó {action} "
+                f"(WR={scorecard.win_rate:.1f}% n={scorecard.sample_size})"
+            )
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(f"[{symbol}] {msg} | {scorecard.reason}")
+            return
+        if policy.should_block:
+            msg = (
+                f"📉 Policy vetó {action} "
+                f"(score={policy.policy_score:.3f} n={policy.sample_size})"
+            )
+            last_action = f"{msg} {symbol}"
+            _set_symbol_status(symbol, msg[:48])
+            log.info(f"[{symbol}] {msg} | {policy.reason}")
+            return
+    else:
+        scorecard = None
+        policy = None
+
     min_conf = sym_cfg.get("min_confidence", 6)
+    if (
+        scorecard is not None
+        and scorecard.sample_size >= scorecard.min_sample
+        and scorecard.win_rate < (scorecard.min_win_rate + 5.0)
+    ):
+        min_conf += int(getattr(cfg, "SCORECARD_MIN_CONF_BONUS", 1))
+    if (
+        policy is not None
+        and policy.sample_size >= int(getattr(cfg, "POLICY_MIN_SAMPLE", 10))
+        and policy.policy_score < (float(getattr(cfg, "POLICY_MIN_SCORE", 0.45)) + 0.1)
+    ):
+        min_conf += int(getattr(cfg, "POLICY_MIN_CONF_BONUS", 1))
     if action == "HOLD" or confidence < min_conf:
         last_action = f"HOLD {symbol} conf={confidence} (min={min_conf})"
         _set_symbol_status(symbol, f"🤖 {action} conf={confidence}/{min_conf}")
@@ -1379,11 +1593,21 @@ def _execute_decision(
     _trail_stage[ticket] = 0
 
     direction_features = build_features(symbol, action, ind, sr_ctx, news_ctx, sym_cfg)
+    setup_id = derive_setup_id(ind, action)
+    session_id = derive_session_from_ind(ind)
+    risk_amount = balance * float(getattr(cfg, "RISK_PER_TRADE", 0.01))
     save_trade(
         ticket=ticket, symbol=symbol, direction=action,
         open_price=price, volume=vol,
         features=direction_features, reason_gemini=reason,
         hilbert_signal=h_signal, hurst_val=ind.get("hurst", 0.5),
+        setup_id=setup_id,
+        setup_score=ind.get("confluence", {}).get("total", 0.0),
+        session=session_id,
+        regime=mem_check.regime,
+        risk_amount=risk_amount,
+        sl=sl,
+        tp=tp,
     )
     tickets_en_memoria.add(ticket)
 
@@ -1431,6 +1655,7 @@ def _execute_decision(
 
 def run():
     global cycle_count, last_action, ind_cache, sr_cache, symbol_status_cache, daily_start_balance
+    global daily_loss_guard_notified
 
     log.info("🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...")
     init_db()
@@ -1476,7 +1701,10 @@ def run():
             if not is_daily_loss_ok(daily_pnl, balance):
                 log.warning("[main] ⛔ Límite diario alcanzado")
                 last_action = "⛔ Límite diario alcanzado"
+                _notify_daily_loss_guard_once(daily_pnl, balance, float(getattr(cfg, "MAX_DAILY_LOSS", 0.05)))
                 time.sleep(cfg.LOOP_SLEEP_SEC * 5); continue
+            else:
+                daily_loss_guard_notified = 0.0
 
             open_positions = get_open_positions()
             open_tickets   = {p["ticket"] for p in open_positions}

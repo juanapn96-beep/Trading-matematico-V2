@@ -9,10 +9,16 @@ algoritmos matemáticos avanzados y aprendizaje automático.
 # 1. Instalar dependencias
 pip install -r requirements.txt
 
-# 2. Verificar credenciales en config.py (ya están configuradas)
+# 2. Copiar .env.example a .env y completar credenciales requeridas
 
 # 3. Ejecutar
 python main.py
+```
+
+### Verificación rápida
+
+```bash
+python -m compileall .
 ```
 
 ## 📁 Estructura

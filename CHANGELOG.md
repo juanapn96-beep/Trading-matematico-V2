@@ -4,6 +4,120 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 17:58 UTC] - FASE 3: Scorecard jerárquico por activo (pre-LLM gate)
+
+### config.py
+- Añadidos parámetros configurables de FASE 3 sin hardcode:
+  - `SCORECARD_LOOKBACK_TRADES`
+  - `SCORECARD_MIN_SAMPLE`
+  - `SCORECARD_MIN_WIN_RATE`
+  - `SCORECARD_MIN_CONF_BONUS`
+- Permiten ajustar lookback, muestra mínima, win-rate mínimo y endurecimiento de confianza desde configuración.
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- **Scorecard jerárquico implementado** con `ScorecardCheck` + `evaluate_scorecard()`:
+  1) `setup_id + session + regime`  
+  2) `setup_id + session`  
+  3) `setup_id`  
+  4) `symbol` (fallback)
+- El cálculo usa solo trades cerrados `WIN/LOSS` (excluye BE) y aplica bloqueo solo con muestra suficiente.
+- Añadidos helpers `derive_setup_id()` y `derive_session_from_ind()` para trazabilidad consistente por activo.
+- **Persistencia FASE 2 reforzada**: la tabla `trades` y sus migraciones ahora incluyen
+  `setup_id`, `setup_score`, `session`, `risk_amount`, `sl`, `tp`.
+- `save_trade()` actualizado para guardar el contexto enriquecido del setup en cada entrada.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado **filtro pre-LLM** en ruta direccional: si el scorecard del setup es pobre, bloquea antes de consultar Gemini.
+- Integrado gate equivalente en ruta lateral (BUY/SELL evaluados) y en post-Gemini como red de seguridad final.
+- `build_context()` ahora adjunta el bloque `SCORECARD JERÁRQUICO` para pasar esta métrica como contexto al modelo.
+- Endurecimiento dinámico de entrada: cuando el setup no está bloqueado pero su WR es marginal, sube `min_confidence` vía `SCORECARD_MIN_CONF_BONUS`.
+- `save_trade()` ahora registra en memoria: `setup_id`, `setup_score`, `session`, `regime`, `risk_amount`, `sl`, `tp`.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 18:01 UTC] - FASE 4: Policy Engine (ranking WR/PF/Reward/Sample)
+
+### config.py
+- Añadidos parámetros configurables de Policy Engine:
+  - `POLICY_LOOKBACK_TRADES`
+  - `POLICY_MIN_SAMPLE`
+  - `POLICY_WEIGHT_WR`, `POLICY_WEIGHT_PF`, `POLICY_WEIGHT_REWARD`, `POLICY_WEIGHT_SAMPLE`
+  - `POLICY_MIN_SCORE`
+  - `POLICY_MIN_CONF_BONUS`
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- Añadidos `PolicyCheck` + `evaluate_policy(...)` para calcular `policy_score` por candidato:
+  - Métricas: Win Rate, Profit Factor, Avg Reward y tamaño de muestra
+  - Normalización y combinación ponderada en score `[0,1]`
+  - Bloqueo duro configurable cuando hay muestra suficiente y score bajo
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado Policy Engine en `_process_symbol(...)`:
+  - Ruta lateral: evalúa BUY y SELL en paralelo, descarta candidatos bloqueados por memoria/scorecard/policy
+  - Ranking final por `policy_score` (desempate con `memory confidence_adj`) y selección del mejor candidato
+  - Ruta direccional: añade veto por policy antes de Gemini
+- Integrado safety-net post-Gemini en `_execute_decision(...)` con `evaluate_policy(...)`.
+- `build_context(...)` ahora adjunta bloque `POLICY ENGINE` para pasar score y métricas a la IA.
+- Endurecimiento dinámico de `min_confidence` cuando policy score es marginal.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 18:10 UTC] - FASE 5: Equity Guard (protección de capital)
+
+### config.py
+- Añadido parámetro configurable:
+  - `EQUITY_GUARD_MIN_PCT` (default `70.0`)
+- Define el piso de equity (porcentaje del balance actual) bajo el cual se bloquean nuevas entradas.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado gate pre-señal en `_process_symbol(...)`:
+  - Si `equity < balance * (EQUITY_GUARD_MIN_PCT/100)`, el símbolo queda bloqueado para nuevas entradas.
+  - Se registra warning en log, estado de símbolo y `last_action`.
+  - **FASE 5.1**: notificación Telegram de Equity Guard con cooldown por símbolo para evitar spam (`_notify_equity_guard_once`).
+  - No afecta gestión de posiciones ya abiertas (trailing/SL/TP siguen operando).
+- **[Agente: GitHub Copilot]**
+
+### modules/telegram_notifier.py
+- `notify_bot_started()` actualizado para listar explícitamente:
+  - `✅ FASE 4 — Policy Engine`
+  - `✅ FASE 5 — Equity Guard`
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 18:48 UTC] - FASE 6: Daily Loss Guard (protección intradía global)
+
+### main.py
+- Añadida notificación Telegram con cooldown para el guard global de pérdida diaria:
+  - Nueva función `_notify_daily_loss_guard_once(...)`.
+  - Mensaje incluye P&L diario actual, límite monetario diario y timestamp UTC.
+- Integrado en el loop principal:
+  - Cuando `is_daily_loss_ok(...)` falla, además de pausar nuevas entradas, ahora también
+    notifica por Telegram (anti-spam por `NOTIF_COOLDOWN_SEC`).
+  - Cuando el P&L vuelve a estar dentro del umbral, se resetea el estado de notificación
+    para permitir futuras alertas.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadido bloque documental **FASE 6 — DAILY LOSS GUARD** para trazar el alcance:
+  - Protección global intradía basada en `MAX_DAILY_LOSS`.
+  - No afecta la gestión de posiciones abiertas.
+- **[Agente: GitHub Copilot]**
+
+### modules/telegram_notifier.py
+- `notify_bot_started()` actualizado para listar explícitamente:
+  - `✅ FASE 6 — Daily Loss Guard (pausa global por pérdida diaria)`
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 17:05 UTC] - FASE 3: Smart Entry Gate + Dashboard v2 + Notifications v2
 
 ### main.py

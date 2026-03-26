@@ -610,6 +610,52 @@ KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para a
 CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad)
 
 # ================================================================
+#  FASE 3 — SCORECARD JERÁRQUICO POR ACTIVO
+# ================================================================
+# Historial máximo (últimos trades cerrados por símbolo) para evaluar setup.
+SCORECARD_LOOKBACK_TRADES = 300
+# Muestra mínima (WIN+LOSS, BE excluido) para considerar estadística confiable.
+SCORECARD_MIN_SAMPLE      = 8
+# Win rate mínimo (%) exigido para permitir el setup (si hay muestra suficiente).
+SCORECARD_MIN_WIN_RATE    = 52.0
+# Endurecimiento dinámico: +1 punto de confianza mínima si scorecard es débil.
+SCORECARD_MIN_CONF_BONUS  = 1
+
+# ================================================================
+#  FASE 4 — POLICY ENGINE (RANKING DE CANDIDATOS)
+# ================================================================
+# Ventana histórica para métricas de policy por activo/setup.
+POLICY_LOOKBACK_TRADES    = 300
+# Muestra mínima para considerar estable el policy score.
+POLICY_MIN_SAMPLE         = 10
+# Pesos del ranking (deben sumar ~1.0).
+POLICY_WEIGHT_WR          = 0.40
+POLICY_WEIGHT_PF          = 0.25
+POLICY_WEIGHT_REWARD      = 0.20
+POLICY_WEIGHT_SAMPLE      = 0.15
+# Umbral de bloqueo duro cuando hay muestra suficiente.
+POLICY_MIN_SCORE          = 0.45
+# Endurecimiento de confianza si policy score es débil.
+POLICY_MIN_CONF_BONUS     = 1
+
+# ================================================================
+#  FASE 5 — EQUITY GUARD (PROTECCIÓN DE CAPITAL)
+# ================================================================
+# Bloquea NUEVAS entradas cuando la equity cae por debajo de este
+# porcentaje del balance actual. No afecta la gestión de posiciones
+# ya abiertas (trailing/SL/TP siguen activos).
+EQUITY_GUARD_MIN_PCT      = 70.0
+
+# ================================================================
+#  FASE 6 — DAILY LOSS GUARD (PROTECCIÓN INTRADÍA GLOBAL)
+# ================================================================
+# Reutiliza MAX_DAILY_LOSS como umbral de protección global.
+# Cuando se supera la pérdida diaria permitida:
+# - se pausan nuevas entradas en TODOS los símbolos
+# - se mantiene la gestión de posiciones abiertas
+# - se envía notificación Telegram con cooldown anti-spam
+
+# ================================================================
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60
