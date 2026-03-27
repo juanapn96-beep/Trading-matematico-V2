@@ -1584,3 +1584,57 @@ def get_learning_report() -> str:
         f"Avg Reward: {stats['avg_reward']:+.3f}\n"
         f"🤖 Modelos: {models_str}"
     )
+
+
+# ════════════════════════════════════════════════════════════════
+#  v6.9 — PARÁMETROS ADAPTATIVOS DE TRAILING STOP
+# ════════════════════════════════════════════════════════════════
+
+def get_adaptive_trail_params(symbol: str, direction: str) -> dict:
+    """
+    v6.9 — Retorna be_atr_mult y be_buffer_mult adaptativos para el símbolo.
+
+    Consulta el historial del símbolo y ajusta los multiplicadores según
+    el rendimiento reciente. Con pocas muestras, retorna defaults del config.
+
+    Returns:
+        dict con "be_atr_mult" y "be_buffer_mult"
+    """
+    sym_cfg = getattr(cfg, "SYMBOLS", {}).get(symbol, {})
+    default_be_atr   = sym_cfg.get("be_atr_mult",
+                                   getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5))
+    default_be_buffer = getattr(cfg, "BE_BUFFER_MULT", 0.5)
+
+    try:
+        con = sqlite3.connect(DB_PATH)
+        cur = con.cursor()
+        rows = cur.execute(
+            "SELECT result, reward FROM trades "
+            "WHERE symbol = ? AND result IS NOT NULL "
+            "ORDER BY closed_at DESC LIMIT 50",
+            (symbol,)
+        ).fetchall()
+        con.close()
+    except Exception:
+        return {"be_atr_mult": default_be_atr, "be_buffer_mult": default_be_buffer}
+
+    if len(rows) < 10:
+        return {"be_atr_mult": default_be_atr, "be_buffer_mult": default_be_buffer}
+
+    wins   = sum(1 for r in rows if r[0] == "WIN")
+    losses = sum(1 for r in rows if r[0] == "LOSS")
+    total  = wins + losses
+    wr     = wins / max(total, 1)
+
+    be_atr_mult   = default_be_atr
+    be_buffer_mult = default_be_buffer
+
+    if wr >= 0.65:
+        be_atr_mult   *= 0.90
+        be_buffer_mult *= 0.85
+    elif wr <= 0.40:
+        be_atr_mult   *= 1.10
+        be_buffer_mult *= 1.15
+
+    return {"be_atr_mult": round(be_atr_mult, 3),
+            "be_buffer_mult": round(be_buffer_mult, 3)}

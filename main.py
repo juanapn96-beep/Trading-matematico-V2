@@ -1,18 +1,20 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — main.py  (v6.5 — TRAILING STOP + WR FIX)     ║
+║   ZAR ULTIMATE BOT v6 — main.py  (v6.9 — TRAILING PROPORCIONAL)       ║
 ║                                                                          ║
-║   FIXES v6.5 (sobre v6.4):                                             ║
-║   ✅ FIX 11 — Trailing stop progresivo (no BE inmediato)               ║
-║       • Etapa 1 (0–1.5×ATR):   SL intacto — dejar respirar             ║
-║       • Etapa 2 (1.5–2.5×ATR): SL→breakeven + buffer 0.1×ATR          ║
-║       • Etapa 3 (2.5–4×ATR):   SL trail a 1.5×ATR del precio actual   ║
-║       • Etapa 4 (>4×ATR):      SL trail a 1.0×ATR del precio actual   ║
-║       • Etapa 5 (>80% hacia TP): SL trail a 0.5×ATR (máxima captura)  ║
+║   v6.9 — TRAILING STOP PROPORCIONAL:                                    ║
+║   ✅ Protección porcentual según progreso TP:                            ║
+║       • <30%: BE puro + buffer mínimo                                   ║
+║       • ≥30%: lockea 15% de ganancia                                    ║
+║       • ≥50%: lockea 35%                                                ║
+║       • ≥70%: lockea 50%                                                ║
+║       • ≥85%: lockea 70%                                                ║
+║   ✅ Anti-SL-Hunting: 2 velas consecutivas en profit requeridas         ║
+║   ✅ Asimetría BUY/SELL (SELL BE más ajustado)                          ║
+║   ✅ Ratchet: SL jamás retrocede, mín 0.5 pts para enviar a MT5       ║
 ║   ✅ FIX 12 — WR = wins/(wins+losses) — BE excluido del cálculo        ║
 ║   ✅ FIX 13 — BE no cuenta como trade en WR ni en EOD                  ║
-║   ✅ FIX 14 — Filtro anti-contra-tendencia: bloquear cuando 4+         ║
-║               indicadores primarios contradicen la dirección           ║
+║   ✅ FIX 14 — Filtro anti-contra-tendencia                              ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -46,7 +48,7 @@ from modules.neural_brain import (
     build_features, check_memory,
     get_learning_report, get_pending_trades, get_memory_stats,
     derive_setup_id, derive_session_from_ind, evaluate_scorecard,
-    evaluate_policy,
+    evaluate_policy, get_adaptive_trail_params,
 )
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
@@ -61,6 +63,7 @@ from modules.telegram_notifier import (
     _send as telegram_send,
 )
 from modules import dashboard
+from modules.web_dashboard import start_web_dashboard, update_bot_state
 
 # ── Logging ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -120,6 +123,15 @@ SYMBOL_COOLDOWN_SEC = getattr(cfg, "SYMBOL_COOLDOWN_SEC", 300)
 
 # Registro diario de trades para EOD
 daily_trades_log: list = []
+
+# v6.9: Cache de modo de trade por símbolo (be_atr_mult, be_buffer_mult)
+trade_mode_cache: dict = {}
+
+# v6.9: Anti-SL-Hunting — conteo de velas consecutivas en profit por ticket
+_profit_candle_count: dict = {}
+
+# v6.9: Último análisis de Gemini (para web dashboard)
+_last_gemini_analysis: dict = {}
 
 
 def _set_symbol_status(symbol: str, status: str):
@@ -586,40 +598,27 @@ def _calc_pips_instrument(deal, symbol: str) -> float:
 
 
 # ════════════════════════════════════════════════════════════════
-#  FIX 11 — TRAILING STOP PROGRESIVO (reemplaza _check_breakeven)
+#  v6.9 — TRAILING STOP PROPORCIONAL (reemplaza FIX 11 estático)
 # ════════════════════════════════════════════════════════════════
 
 # Estado del trailing por ticket: qué etapa alcanzó
-_trail_stage: dict = {}  # ticket → int (0=sin activar, 1=BE, 2=trail1.5, 3=trail1.0, 4=tight)
+_trail_stage: dict = {}  # ticket → str ("BE"|"15%"|"35%"|"50%"|"70%")
 
 
 def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     """
-    FIX 11 — Trailing stop progresivo en 5 etapas:
+    v6.9 — Trailing Stop Proporcional:
 
-    ETAPA 0 (0 – 1.5×ATR mov favorable):
-        NO tocar el SL. Dejar que el precio respire.
-        El error anterior era activar BE demasiado pronto (1.0×ATR),
-        lo que causaba que el ruido normal cerrara el 97% de trades en BE.
+    Protección porcentual según tp_progress = 1 - (tp_remaining / tp_total):
+      < 30%:  BE puro (open_p + buffer)
+      ≥ 30%:  lockea 15% de ganancia en precio
+      ≥ 50%:  lockea 35%
+      ≥ 70%:  lockea 50%
+      ≥ 85%:  lockea 70%
 
-    ETAPA 1 (1.5 – 2.5×ATR mov favorable):
-        Mover SL a breakeven + buffer de 0.1×ATR.
-        El capital queda protegido pero con margen para respirar.
-
-    ETAPA 2 (2.5 – 4×ATR mov favorable):
-        Trail dinámico: SL se mueve a 1.5×ATR del precio actual.
-        Nunca retrocede. Lockea ~1×ATR de ganancia.
-
-    ETAPA 3 (>4×ATR mov favorable):
-        Trail más ajustado: SL a 1.0×ATR del precio actual.
-        Lockea ~3×ATR de ganancia.
-
-    ETAPA 4 (>80% del camino hacia TP):
-        Trail muy ajustado: SL a 0.5×ATR del precio actual.
-        Maximiza captura cuando estamos cerca del TP.
-
-    NUNCA retrocede el SL (solo se mueve en dirección favorable).
-    NUNCA mueve el SL por debajo del precio de apertura (siempre en ganancia).
+    Anti-SL-Hunting: requiere ≥ 2 velas consecutivas en profit.
+    Asimetría BUY/SELL: SELL tiene BE más ajustado.
+    Ratchet: SL jamás retrocede; mín 0.5 puntos para enviar a MT5.
     """
     global last_action, symbol_status_cache
 
@@ -643,135 +642,122 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
         return
     point = sym_info.point or 0.00001
 
-    atr_pts = atr_val / point
-
-    # ── Calcular movimiento favorable en puntos ──
-    if direction == "BUY":
-        move_pts   = (cur_p - open_p) / point
-        tp_total   = (tp - open_p) / point  if tp > open_p else 0
-        tp_remaining = (tp - cur_p) / point if tp > cur_p  else 0
+    # ── Anti-SL-Hunting: conteo de velas consecutivas en profit ──
+    profit_price = cur_p - open_p if direction == "BUY" else open_p - cur_p
+    if profit_price > 0:
+        _profit_candle_count[ticket] = _profit_candle_count.get(ticket, 0) + 1
     else:
-        move_pts   = (open_p - cur_p) / point
-        tp_total   = (open_p - tp) / point  if tp < open_p else 0
-        tp_remaining = (cur_p - tp) / point if tp < cur_p  else 0
+        _profit_candle_count[ticket] = 0
+        return  # Precio en pérdida → no actuar
 
-    # Si el precio está en pérdida o exactamente en entrada → no hacer nada
-    if move_pts <= 0:
-        return
+    if _profit_candle_count[ticket] < 2:
+        return  # Requiere ≥2 ciclos consecutivos en profit
 
-    # Calcular progreso hacia TP (0.0 = entrada, 1.0 = TP)
-    tp_progress = 1.0 - (tp_remaining / max(tp_total, 1))
+    # ── Calcular progreso hacia TP ──
+    if direction == "BUY":
+        tp_total     = tp - open_p if tp > open_p else 0
+        tp_remaining = tp - cur_p  if tp > cur_p  else 0
+    else:
+        tp_total     = open_p - tp if tp < open_p else 0
+        tp_remaining = cur_p - tp  if tp < cur_p  else 0
+
+    tp_progress = 1.0 - (tp_remaining / max(tp_total, point))
     tp_progress = max(0.0, min(1.0, tp_progress))
 
-    # ── be_atr_mult del símbolo: cuánto necesita moverse para activar BE ──
-    # FIX: ahora el mínimo es 1.5 (no 1.0). Configurado en config.py por símbolo.
-    be_atr_mult = sym_cfg.get("be_atr_mult", getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5))
-    be_threshold_pts = be_atr_mult * atr_pts
+    # ── Parámetros adaptativos: leer de trade_mode_cache o sym_cfg ──
+    tmc = trade_mode_cache.get(symbol, {})
+    be_atr_mult   = tmc.get("be_atr_mult",
+                            sym_cfg.get("be_atr_mult",
+                                        getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5)))
+    be_buffer_mult = tmc.get("be_buffer_mult",
+                             getattr(cfg, "BE_BUFFER_MULT", 0.5))
 
-    current_stage = _trail_stage.get(ticket, 0)
+    # ── Asimetría BUY/SELL: SELL tiene BE más ajustado ──
+    if direction == "SELL":
+        be_atr_mult    = be_atr_mult * 0.9
+        be_buffer_mult = 0.35
 
-    # ── ETAPA 0: Demasiado pronto — no tocar ──
-    if move_pts < be_threshold_pts:
+    be_threshold = be_atr_mult * atr_val
+
+    # ── Umbral mínimo: no activar hasta que profit_price supere be_threshold ──
+    if profit_price < be_threshold:
         return
 
-    # ── Determinar nueva etapa y trail distance ──
-    new_sl = None
-    new_stage = current_stage
+    # ── Determinar porcentaje de bloqueo según tp_progress ──
+    new_sl    = None
+    stage_lbl = ""
 
-    if tp_progress >= 0.80:
-        # ETAPA 4: Cerca del TP — trail muy ajustado (0.5×ATR)
-        trail_pts = 0.5 * atr_pts
-        new_stage = 4
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 4.0 * atr_pts:
-        # ETAPA 3: >4×ATR de ganancia — trail 1.0×ATR
-        trail_pts = 1.0 * atr_pts
-        new_stage = 3
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 2.5 * atr_pts:
-        # ETAPA 2: >2.5×ATR — trail 1.5×ATR
-        trail_pts = 1.5 * atr_pts
-        new_stage = 2
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
+    if tp_progress >= 0.85:
+        lock_pct  = 0.70
+        stage_lbl = "70%"
+    elif tp_progress >= 0.70:
+        lock_pct  = 0.50
+        stage_lbl = "50%"
+    elif tp_progress >= 0.50:
+        lock_pct  = 0.35
+        stage_lbl = "35%"
+    elif tp_progress >= 0.30:
+        lock_pct  = 0.15
+        stage_lbl = "15%"
     else:
-        # ETAPA 1: Activar breakeven (abierto tras 1.5×ATR)
-        # Mover SL a precio de apertura + pequeño buffer (0.1×ATR)
-        buffer_pts = max(1.0, atr_pts * 0.10)
-        new_stage  = 1
+        # < 30%: BE puro con buffer mínimo
+        lock_pct  = 0.0
+        stage_lbl = "BE"
+
+    # ── Calcular nuevo SL basado en precio ──
+    if lock_pct > 0:
+        locked_profit = profit_price * lock_pct
         if direction == "BUY":
-            new_sl = open_p + buffer_pts * point
+            new_sl = open_p + locked_profit
         else:
-            new_sl = open_p - buffer_pts * point
+            new_sl = open_p - locked_profit
+    else:
+        # BE puro: open_p + buffer
+        buffer = be_buffer_mult * atr_val
+        if direction == "BUY":
+            new_sl = open_p + buffer
+        else:
+            new_sl = open_p - buffer
 
     if new_sl is None:
         return
 
     new_sl = round(new_sl, 5)
 
-    # ── Regla crítica: NUNCA retroceder el SL ──
+    # ── Regla de No-Retroceso (Ratchet): SL jamás retrocede ──
     if direction == "BUY":
         if new_sl <= sl:
-            return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por debajo de la apertura en etapas >= 2
-        if new_stage >= 2:
-            min_sl = open_p + (atr_pts * 0.05) * point
-            new_sl = max(new_sl, min_sl)
+            return
     else:
         if new_sl >= sl:
-            return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por encima de la apertura en etapas >= 2
-        if new_stage >= 2:
-            max_sl = open_p - (atr_pts * 0.05) * point
-            new_sl = min(new_sl, max_sl)
+            return
 
-    # ── Verificar que sigue siendo diferente al SL actual ──
+    # ── Movimiento mínimo de 0.5 puntos para enviar a MT5 ──
     diff_pts = abs(new_sl - sl) / point
     if diff_pts < 0.5:
-        return  # Diferencia mínima insignificante
+        return
 
     # ── Mover SL ──
     if move_sl(ticket, new_sl):
-        prev_stage = _trail_stage.get(ticket, 0)
-        _trail_stage[ticket] = new_stage
+        prev_stage = _trail_stage.get(ticket, "")
+        _trail_stage[ticket] = stage_lbl
 
-        profit_pips = move_pts
-        stage_names = {
-            1: "BE activado",
-            2: "Trail 1.5×ATR",
-            3: "Trail 1.0×ATR",
-            4: "Trail 0.5×ATR (TP cercano)",
-        }
-        stage_label = stage_names.get(new_stage, f"Etapa {new_stage}")
-        locked_pts  = (new_sl - open_p) / point if direction == "BUY" else (open_p - new_sl) / point
+        locked_pts = (new_sl - open_p) / point if direction == "BUY" else (open_p - new_sl) / point
 
-        if new_stage == 1 and prev_stage < 1:
-            # Primera vez que se activa BE — notificar
-            notify_breakeven(symbol, ticket, new_sl, profit_pips)
+        if stage_lbl == "BE" and prev_stage == "":
+            notify_breakeven(symbol, ticket, new_sl, profit_price / point)
             log.info(
                 f"[Trail] 🛡 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | SL→{new_sl:.5f}"
+                f"— BE activado | profit={profit_price:.5f} | SL→{new_sl:.5f}"
             )
         else:
-            # Trailing update — log sin notificación Telegram
             log.info(
                 f"[Trail] 📈 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | "
+                f"— Lock {stage_lbl} | profit={profit_price:.5f} | "
                 f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
             )
 
-        last_action = f"Trail {stage_label} #{ticket} {symbol} lock={locked_pts:.0f}pts"
+        last_action = f"Trail {stage_lbl} #{ticket} {symbol} lock={locked_pts:.0f}pts"
 
 
 # ════════════════════════════════════════════════════════════════
@@ -845,7 +831,8 @@ def manage_positions(positions: list, ind_by_sym: dict):
         _manage_trailing_stop(pos, sym_cfg_data)
 
         # Marcar tickets que están en trail
-        if _trail_stage.get(ticket, 0) >= 1:
+        # v6.9: stage is now a string; any non-empty string means trail active
+        if _trail_stage.get(ticket, ""):
             be_activated.add(ticket)
 
         # Alerta TP cercano (15% restante del camino)
@@ -872,6 +859,11 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
     closed          = open_tickets_before - current_tickets
     if not closed:
         return
+
+    # v6.9: limpieza de estado de trailing/profit-candle para tickets cerrados
+    for t in closed:
+        _trail_stage.pop(t, None)
+        _profit_candle_count.pop(t, None)
 
     from_time = datetime.now(timezone.utc) - timedelta(hours=24)
     history   = mt5.history_deals_get(from_time, datetime.now(timezone.utc))
@@ -1437,12 +1429,19 @@ def _execute_decision(
     mem_check, features, balance, df_entry,
 ):
     """Valida la decisión de Gemini y aplica filtro anti-contra-tendencia."""
-    global last_action
+    global last_action, _last_gemini_analysis
 
     if decision is None:
         log.warning(f"[{symbol}] Gemini no respondió")
         _set_symbol_status(symbol, "🤖 Gemini no respondió")
         return
+
+    # v6.9: guardar último análisis para web dashboard
+    _last_gemini_analysis = {
+        "symbol": symbol,
+        "decision": decision,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
 
     action     = decision.get("decision", "HOLD")
     confidence = int(decision.get("confidence", 0))
@@ -1657,7 +1656,7 @@ def run():
     global cycle_count, last_action, ind_cache, sr_cache, symbol_status_cache, daily_start_balance
     global daily_loss_guard_notified
 
-    log.info("🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...")
+    log.info("🚀 ZAR ULTIMATE BOT v6.9 — TRAILING PROPORCIONAL — Iniciando...")
     init_db()
 
     if not conectar_mt5():
@@ -1673,14 +1672,17 @@ def run():
     mem_stats = get_memory_stats()
     notify_bot_started(balance, equity, mem_stats, list(cfg.SYMBOLS.keys()))
     log.info(
-        f"✅ Bot v6.5 iniciado | Balance=${balance:,.2f} | "
+        f"✅ Bot v6.9 iniciado | Balance=${balance:,.2f} | "
         f"{len(cfg.SYMBOLS)} símbolos | Modo 24/5 | "
         f"Cooldown={SYMBOL_COOLDOWN_SEC}s | "
-        f"Trail: BE@1.5×ATR → Trail@2.5× → Trail@4× → Tight@TP80%"
+        f"Trail: Proporcional (<30%BE, ≥30%→15%, ≥50%→35%, ≥70%→50%, ≥85%→70%)"
     )
 
     for pending in get_pending_trades():
         tickets_en_memoria.add(pending["ticket"])
+
+    # v6.9: Levantar web dashboard en thread daemon
+    start_web_dashboard()
 
     while True:
         cycle_count += 1
@@ -1724,6 +1726,17 @@ def run():
             open_positions = get_open_positions()
             manage_positions(open_positions, ind_cache)
             _render_dashboard(balance, equity, open_positions)
+
+            # v6.9: Actualizar estado para web dashboard
+            update_bot_state(
+                balance=balance,
+                equity=equity,
+                daily_pnl=daily_pnl,
+                open_positions=open_positions,
+                last_action=last_action,
+                cycle=cycle_count,
+                last_gemini=_last_gemini_analysis,
+            )
 
         except Exception as e:
             log.error(f"[main] Error ciclo #{cycle_count}: {e}", exc_info=True)

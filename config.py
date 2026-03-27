@@ -513,6 +513,10 @@ MAGIC_NUMBER        = 202606
 # Valor por defecto usado si no está definido por símbolo
 BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en favor
 
+# v6.9: Buffer mínimo para BE puro (multiplicador de ATR)
+# BUY usa este valor; SELL usa 0.35 (asimetría por exposición ilimitada al alza)
+BE_BUFFER_MULT      = 0.5
+
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
 SYMBOL_COOLDOWN_SEC = 300
