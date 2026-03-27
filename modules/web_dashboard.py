@@ -306,15 +306,15 @@ HTML_TEMPLATE = """
       </section>
 
       <section class="panel">
-        <h2>Último análisis Gemini</h2>
+        <h2>Último análisis Groq</h2>
         <div id="analysis" class="analysis"></div>
       </section>
     </section>
 
     <section class="grid">
       <section class="panel">
-        <h2>Métricas Gemini</h2>
-        <div id="geminiMetrics" class="status-list"></div>
+        <h2>Métricas Groq</h2>
+        <div id="groqMetrics" class="status-list"></div>
       </section>
 
       <section class="panel">
@@ -370,7 +370,7 @@ HTML_TEMPLATE = """
     function renderAnalysis(analysis) {
       const container = document.getElementById('analysis');
       if (!analysis || !analysis.symbol) {
-        container.innerHTML = '<div class="empty">Aún no hay análisis Gemini disponible.</div>';
+        container.innerHTML = '<div class="empty">Aún no hay análisis Groq disponible.</div>';
         return;
       }
 
@@ -400,10 +400,10 @@ HTML_TEMPLATE = """
       `).join('');
     }
 
-    function renderGeminiMetrics(metrics) {
-      const container = document.getElementById('geminiMetrics');
+    function renderGroqMetrics(metrics) {
+      const container = document.getElementById('groqMetrics');
       if (!metrics || Object.keys(metrics).length === 0) {
-        container.innerHTML = '<div class="empty">Sin métricas Gemini.</div>';
+        container.innerHTML = '<div class="empty">Sin métricas Groq.</div>';
         return;
       }
 
@@ -475,8 +475,8 @@ HTML_TEMPLATE = """
         setText('dailyPnl', money.format(payload.daily_pnl || 0));
         setText('cycle', String(payload.cycle || 0));
         renderPositions(payload.active_trades || []);
-        renderAnalysis(payload.last_gemini_analysis || {});
-        renderGeminiMetrics(payload.gemini_metrics || {});
+        renderAnalysis(payload.last_groq_analysis || {});
+        renderGroqMetrics(payload.groq_metrics || {});
         renderStatus(payload.symbol_status || {});
         renderLastAction(payload);
         renderMemoryNews(payload);
@@ -506,7 +506,7 @@ def create_app(status_provider):
         payload.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         payload.setdefault("active_trades", [])
         payload.setdefault("symbol_status", {})
-        payload.setdefault("last_gemini_analysis", {})
+        payload.setdefault("last_groq_analysis", {})
         return jsonify(payload)
 
     return app
