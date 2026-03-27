@@ -532,7 +532,7 @@ def adaptive_linear_regression(close: pd.Series, period: int = 50):
 #  FUNCIÓN PRINCIPAL — compute_all()
 # ══════════════════════════════════════════════════════════════════
 
-def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
+def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataFrame = None) -> dict:
     """
     Calcula TODOS los indicadores y retorna un diccionario con los
     valores actuales (última vela).
@@ -541,6 +541,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
     high   = df["high"]
     low    = df["low"]
     volume = df["volume"]
+    micro_df = df_entry if df_entry is not None and len(df_entry) >= 10 else df
 
     ctx = {}
 
@@ -776,19 +777,27 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict) -> dict:
         # Guardar votos para el prompt de Gemini (transparencia)
         ctx["trend_votes"] = {"bull": bullish_votes, "bear": bearish_votes}
 
+        micro_price_now = float(micro_df["close"].iloc[-1]) if len(micro_df) > 0 else float(price_now)
         ctx["price"] = round(float(price_now), 4)
+        ctx["entry_price"] = round(float(micro_price_now), 4)
+        if len(micro_df) > 0 and "time" in micro_df.columns:
+            ctx["entry_candle_time"] = pd.Timestamp(micro_df["time"].iloc[-1]).isoformat()
+        else:
+            ctx["entry_candle_time"] = ""
 
         # ══════════════════════════════════════════════════════════
         #  PILAR 3 — MICROESTRUCTURA (FASE 1)
         # ══════════════════════════════════════════════════════════
         try:
-            micro     = compute_microstructure(df, price=float(price_now))
+            micro     = compute_microstructure(micro_df, price=float(micro_price_now))
             ctx["microstructure"] = micro.to_dict()
+            ctx["microstructure"]["source_tf"] = "ENTRY" if micro_df is df_entry else "TREND"
         except Exception as micro_err:
             log.debug(f"[indicators] Microstructure error en {symbol}: {micro_err}")
             ctx["microstructure"] = {
                 "micro_score": 0.0, "micro_bias": "NEUTRAL",
                 "description": "Error en cálculo",
+                "source_tf": "UNKNOWN",
             }
 
         # ══════════════════════════════════════════════════════════

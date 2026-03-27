@@ -372,44 +372,42 @@ def _rss_fetch() -> List[NewsItem]:
 #  CONSTRUCTOR PRINCIPAL
 # ════════════════════════════════════════════════════════════════
 
-def build_news_context(symbol: str, sym_cfg: dict) -> NewsContext:
-    topics    = sym_cfg.get("news_topics","economy_monetary,economy_macro")
-    av_items  = _av_fetch(topics)
-    rss_items = _rss_fetch()
-
+def _dedupe_and_rank_items(items: List[NewsItem], limit: int = 25) -> List[NewsItem]:
     seen, all_items = set(), []
-    for item in av_items + rss_items:
+    for item in items:
         key = item.title.lower()[:60]
         if key not in seen:
             seen.add(key)
             all_items.append(item)
 
     all_items.sort(
-        key=lambda x:(x.is_breaking, bool(x.currency_impacts), abs(x.sentiment)),
-        reverse=True
+        key=lambda x: (x.is_breaking, bool(x.currency_impacts), abs(x.sentiment)),
+        reverse=True,
     )
-    all_items = all_items[:25]
+    return all_items[:limit]
 
-    avg_sent       = sum(i.sentiment for i in all_items)/len(all_items) if all_items else 0.0
-    hi_count       = sum(1 for i in all_items if i.currency_impacts)
+
+def _build_news_context_from_items(symbol: str, sym_cfg: dict, items: List[NewsItem]) -> NewsContext:
+    all_items = _dedupe_and_rank_items(items)
+
+    avg_sent = sum(i.sentiment for i in all_items) / len(all_items) if all_items else 0.0
+    hi_count = sum(1 for i in all_items if i.currency_impacts)
     breaking_count = sum(1 for i in all_items if i.is_breaking)
 
-    # ── Sentimiento direccional por divisa (ponderado por recencia) ──
     cur_scores: Dict[str, list] = {}
     for item in all_items:
         if not item.currency_impacts:
             continue
-        age_h  = _age_hours(item.published_dt)
+        age_h = _age_hours(item.published_dt)
         weight = max(0.1, 1.0 - age_h / 24)
         for cur, score in item.currency_impacts.items():
             cur_scores.setdefault(cur, []).append(score * weight)
 
     currency_sentiment = {
-        cur: round(sum(scores)/len(scores), 3)
+        cur: round(sum(scores) / len(scores), 3)
         for cur, scores in cur_scores.items() if scores
     }
 
-    # ── Pausa SOLO por breaking news ─────────────────────────────
     should_pause = breaking_count >= 1
     pause_reason = ""
     if should_pause:
@@ -417,8 +415,7 @@ def build_news_context(symbol: str, sym_cfg: dict) -> NewsContext:
         pause_reason = f"🚨 BREAKING: {' | '.join(titles)}"
         log.warning(f"[news] PAUSA: {pause_reason}")
 
-    # ── Resumen para prompt Gemini ────────────────────────────────
-    sym_currencies = SYMBOL_TO_CURRENCIES.get(symbol, sym_cfg.get("currencies",["USD"]))
+    sym_currencies = SYMBOL_TO_CURRENCIES.get(symbol, sym_cfg.get("currencies", ["USD"]))
     lines = [
         f"📰 {len(all_items)} artículos | Sentimiento: {avg_sent:+.2f} | Breaking: {breaking_count}",
         "",
@@ -436,21 +433,52 @@ def build_news_context(symbol: str, sym_cfg: dict) -> NewsContext:
     for item in all_items:
         if item.currency_impacts and shown < 3:
             age_str = f"{_age_hours(item.published_dt):.0f}h"
-            cur_str = ", ".join(f"{k}:{v:+.2f}" for k,v in item.currency_impacts.items())
+            cur_str = ", ".join(f"{k}:{v:+.2f}" for k, v in item.currency_impacts.items())
             lines.append(f"  {'🚨' if item.is_breaking else '📰'} [{age_str}] {item.title[:60]}")
             lines.append(f"       → {cur_str}")
             shown += 1
 
-    log.info(f"[news] {symbol}: hi={hi_count} breaking={breaking_count} "
-             f"curs={list(currency_sentiment.keys())} pausa={should_pause}")
+    log.info(
+        f"[news] {symbol}: hi={hi_count} breaking={breaking_count} "
+        f"curs={list(currency_sentiment.keys())} pausa={should_pause}"
+    )
 
     return NewsContext(
-        items=all_items, avg_sentiment=round(avg_sent,3),
-        high_impact_count=hi_count, breaking_count=breaking_count,
-        should_pause=should_pause, pause_reason=pause_reason,
+        items=all_items,
+        avg_sentiment=round(avg_sent, 3),
+        high_impact_count=hi_count,
+        breaking_count=breaking_count,
+        should_pause=should_pause,
+        pause_reason=pause_reason,
         fetched_at=datetime.now(timezone.utc).isoformat(),
-        summary="\n".join(lines), currency_sentiment=currency_sentiment,
+        summary="\n".join(lines),
+        currency_sentiment=currency_sentiment,
     )
+
+
+def build_shared_news_context(topics: str) -> NewsContext:
+    av_items = _av_fetch(topics)
+    rss_items = _rss_fetch()
+    merged = _dedupe_and_rank_items(av_items + rss_items)
+    return NewsContext(
+        items=merged,
+        fetched_at=datetime.now(timezone.utc).isoformat(),
+    )
+
+
+def derive_symbol_news_context(symbol: str, sym_cfg: dict, shared_ctx: NewsContext) -> NewsContext:
+    return _build_news_context_from_items(
+        symbol,
+        sym_cfg,
+        list(getattr(shared_ctx, "items", []) or []),
+    )
+
+
+def build_news_context(symbol: str, sym_cfg: dict) -> NewsContext:
+    """Wrapper compatible con flujo previo por símbolo."""
+    topics = sym_cfg.get("news_topics", "economy_monetary,economy_macro")
+    shared = build_shared_news_context(topics)
+    return derive_symbol_news_context(symbol, sym_cfg, shared)
 
 
 def format_news_for_prompt(ctx: NewsContext) -> str:
@@ -458,7 +486,9 @@ def format_news_for_prompt(ctx: NewsContext) -> str:
     if ctx.should_pause:
         lines += ["", f"🚨 BREAKING NEWS: {ctx.pause_reason}", "→ HOLD obligatorio."]
     else:
-        lines += ["",
-                  "ℹ️ Usa el sentimiento direccional para reforzar o moderar tu señal.",
-                  "El calendario económico ya maneja los eventos programados."]
+        lines += [
+            "",
+            "ℹ️ Usa el sentimiento direccional para reforzar o moderar tu señal.",
+            "El calendario económico ya maneja los eventos programados.",
+        ]
     return "\n".join(lines)

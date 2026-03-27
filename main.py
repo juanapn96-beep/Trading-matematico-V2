@@ -19,6 +19,8 @@
 import sys
 import time
 import json
+import threading
+import re
 import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
@@ -39,14 +41,17 @@ except ImportError:
 import config as cfg
 from modules.indicators        import compute_all
 from modules.sr_zones          import build_sr_context, sr_for_prompt
-from modules.news_engine       import build_news_context, format_news_for_prompt
+from modules.news_engine       import (
+    build_news_context, build_shared_news_context, derive_symbol_news_context,
+    format_news_for_prompt,
+)
 from modules.economic_calendar import calendar as eco_calendar
 from modules.neural_brain import (
     init_db, save_trade, update_trade_result,
     build_features, check_memory,
     get_learning_report, get_pending_trades, get_memory_stats,
     derive_setup_id, derive_session_from_ind, evaluate_scorecard,
-    evaluate_policy,
+    evaluate_policy, get_adaptive_trail_params,
 )
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
@@ -61,6 +66,7 @@ from modules.telegram_notifier import (
     _send as telegram_send,
 )
 from modules import dashboard
+from modules.web_dashboard import start_web_dashboard
 
 # ── Logging ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -120,11 +126,327 @@ SYMBOL_COOLDOWN_SEC = getattr(cfg, "SYMBOL_COOLDOWN_SEC", 300)
 
 # Registro diario de trades para EOD
 daily_trades_log: list = []
+trade_mode_cache: dict = {}
+_profit_candle_count: dict = {}
+_profit_candle_last_seen: dict = {}
+last_gemini_analysis: dict = {}
+web_status_snapshot: dict = {}
+state_lock = threading.RLock()
+gemini_cooldown_until: float = 0.0
+gemini_call_cache: dict = {}
+gemini_usage_stats: dict = {
+    "api_calls_total": 0,
+    "api_success_total": 0,
+    "cache_hits_total": 0,
+    "skipped_by_gate_total": 0,
+    "skipped_by_budget_total": 0,
+    "cooldown_skips_total": 0,
+    "quota_hits_total": 0,
+    "fallback_holds_total": 0,
+    "errors_total": 0,
+}
+gemini_hourly_usage: dict = {}
+gemini_daily_usage: dict = {}
+shared_news_cache = None
+shared_news_last_update: float = 0.0
 
 
 def _set_symbol_status(symbol: str, status: str):
     global symbol_status_cache
     symbol_status_cache[symbol] = status
+
+
+def _set_last_gemini_analysis(symbol: str, analysis: Optional[dict]):
+    global last_gemini_analysis
+    if not analysis:
+        return
+    with state_lock:
+        last_gemini_analysis = {
+            "symbol": symbol,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "decision": analysis.get("decision", "HOLD"),
+            "confidence": analysis.get("confidence", 0),
+            "reason": analysis.get("reason", ""),
+            "key_signals": analysis.get("key_signals", []),
+            "main_risk": analysis.get("main_risk", ""),
+        }
+
+
+def _bump_gemini_metric(metric: str):
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y-%m-%d %H")
+    day_key = now.strftime("%Y-%m-%d")
+    with state_lock:
+        gemini_usage_stats[metric] = int(gemini_usage_stats.get(metric, 0)) + 1
+        if metric == "api_calls_total":
+            gemini_hourly_usage[hour_key] = int(gemini_hourly_usage.get(hour_key, 0)) + 1
+            gemini_daily_usage[day_key] = int(gemini_daily_usage.get(day_key, 0)) + 1
+
+            while len(gemini_hourly_usage) > 72:
+                oldest = sorted(gemini_hourly_usage.keys())[0]
+                gemini_hourly_usage.pop(oldest, None)
+            while len(gemini_daily_usage) > 14:
+                oldest = sorted(gemini_daily_usage.keys())[0]
+                gemini_daily_usage.pop(oldest, None)
+
+
+def _get_gemini_metrics_snapshot() -> dict:
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y-%m-%d %H")
+    day_key = now.strftime("%Y-%m-%d")
+    with state_lock:
+        return {
+            **gemini_usage_stats,
+            "api_calls_current_hour": int(gemini_hourly_usage.get(hour_key, 0)),
+            "api_calls_current_day": int(gemini_daily_usage.get(day_key, 0)),
+            "cooldown_until": datetime.fromtimestamp(gemini_cooldown_until, tz=timezone.utc).isoformat() if gemini_cooldown_until > time.time() else "",
+        }
+
+
+def _get_gemini_metrics_snapshot_unlocked() -> dict:
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y-%m-%d %H")
+    day_key = now.strftime("%Y-%m-%d")
+    return {
+        **gemini_usage_stats,
+        "api_calls_current_hour": int(gemini_hourly_usage.get(hour_key, 0)),
+        "api_calls_current_day": int(gemini_daily_usage.get(day_key, 0)),
+        "cooldown_until": datetime.fromtimestamp(gemini_cooldown_until, tz=timezone.utc).isoformat() if gemini_cooldown_until > time.time() else "",
+    }
+
+
+def _build_gemini_fallback_decision(reason: str) -> dict:
+    _bump_gemini_metric("fallback_holds_total")
+    fallback = {
+        "decision": "HOLD",
+        "confidence": 0,
+        "reason": reason,
+        "key_signals": ["fallback_system", "gemini_unavailable"],
+        "main_risk": "Gemini no disponible para validar noticias y sentimiento",
+    }
+    _set_last_gemini_analysis("SYSTEM", fallback)
+    return fallback
+
+
+def _serialize_position_for_web(pos: dict) -> dict:
+    direction = "LONG" if pos.get("type") == 0 else "SHORT"
+    return {
+        "ticket": int(pos.get("ticket", 0)),
+        "symbol": pos.get("symbol", ""),
+        "direction": direction,
+        "volume": float(pos.get("volume", 0.0) or 0.0),
+        "profit": float(pos.get("profit", 0.0) or 0.0),
+        "price_open": float(pos.get("price_open", 0.0) or 0.0),
+        "price_current": float(pos.get("price_current", 0.0) or 0.0),
+        "sl": float(pos.get("sl", 0.0) or 0.0),
+        "tp": float(pos.get("tp", 0.0) or 0.0),
+    }
+
+
+def _update_web_status_snapshot(balance: float, equity: float, open_positions: list):
+    global web_status_snapshot
+    news_ctx = next(iter(news_cache.values()), None)
+    news_payload = None
+    if news_ctx is not None:
+        news_payload = {
+            "avg_sentiment": float(getattr(news_ctx, "avg_sentiment", 0.0) or 0.0),
+            "high_impact_count": int(getattr(news_ctx, "high_impact_count", 0) or 0),
+            "should_pause": bool(getattr(news_ctx, "should_pause", False)),
+        }
+
+    with state_lock:
+        web_status_snapshot = {
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+            "cycle": cycle_count,
+            "balance": float(balance or 0.0),
+            "equity": float(equity or 0.0),
+            "daily_pnl": float(daily_pnl or 0.0),
+            "last_action": last_action,
+            "active_trades": [_serialize_position_for_web(pos) for pos in open_positions],
+            "symbol_status": dict(symbol_status_cache),
+            "memory": get_memory_stats(),
+            "news": news_payload,
+            "shared_news_fetched_at": getattr(shared_news_cache, "fetched_at", "") if shared_news_cache is not None else "",
+            "gemini_metrics": _get_gemini_metrics_snapshot_unlocked(),
+            "last_gemini_analysis": dict(last_gemini_analysis),
+        }
+
+
+def _get_web_status_snapshot() -> dict:
+    with state_lock:
+        return dict(web_status_snapshot)
+
+
+def _get_last_candle_stamp(df: pd.DataFrame) -> str:
+    if df is None or len(df) == 0:
+        return ""
+    ts = pd.Timestamp(df["time"].iloc[-1]).to_pydatetime()
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.isoformat()
+
+
+def _extract_retry_delay_seconds(err_str: str) -> float:
+    match = re.search(r"retry in\s+([0-9.]+)s", err_str, re.IGNORECASE)
+    if not match:
+        return 60.0
+    try:
+        return max(1.0, float(match.group(1)))
+    except Exception:
+        return 60.0
+
+
+def _build_gemini_cache_key(symbol: str, direction_hint: str, candle_stamp: str, ind: dict) -> str:
+    conf_total = round(float(ind.get("confluence", {}).get("total", 0.0) or 0.0), 2)
+    h1_trend = ind.get("h1_trend", "LATERAL")
+    hilbert_signal = ind.get("hilbert", {}).get("signal", "NEUTRAL")
+    return "|".join([
+        symbol,
+        direction_hint,
+        candle_stamp,
+        h1_trend,
+        hilbert_signal,
+        f"{conf_total:.2f}",
+    ])
+
+
+def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> Optional[dict]:
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        return None
+    price = tick.ask if action == "BUY" else tick.bid
+    sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
+    rr = get_rr(price, sl, tp)
+    return {
+        "action": action,
+        "price": price,
+        "sl": sl,
+        "tp": tp,
+        "rr": rr,
+    }
+
+
+def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
+    strategy_type = str(sym_cfg.get("strategy_type", "HYBRID") or "HYBRID")
+    rsi = float(ind.get("rsi", 50.0) or 50.0)
+    fisher = float(ind.get("fisher", 0.0) or 0.0)
+    macd_dir = ind.get("macd_dir", "NEUTRAL")
+    ha_trend = ind.get("ha_trend", "NEUTRAL")
+    kalman_trend = ind.get("kalman_trend", "NEUTRAL")
+    supertrend = int(ind.get("supertrend", 0) or 0)
+    hilbert_signal = ind.get("hilbert", {}).get("signal", "NEUTRAL")
+    conf_total = float(ind.get("confluence", {}).get("total", 0.0) or 0.0)
+    in_strong_zone = bool(getattr(sr_ctx, "in_strong_zone", False))
+
+    bullish_primaries = sum([
+        macd_dir == "ALCISTA",
+        ha_trend == "ALCISTA",
+        kalman_trend == "ALCISTA",
+        supertrend == 1,
+    ])
+    bearish_primaries = sum([
+        macd_dir == "BAJISTA",
+        ha_trend == "BAJISTA",
+        kalman_trend == "BAJISTA",
+        supertrend == -1,
+    ])
+
+    if strategy_type in {"VOLATILITY_CYCLE", "CYCLE_REVERSION", "GOLD_BETA_REVERSION", "CRYPTO_WAVE"}:
+        if action == "BUY":
+            if hilbert_signal == "LOCAL_MAX":
+                return False, f"{strategy_type}: Hilbert en techo"
+            if rsi >= float(sym_cfg.get("rsi_overbought", 70)) and not in_strong_zone:
+                return False, f"{strategy_type}: RSI demasiado alto sin S/R fuerte"
+            if fisher > 2.5 and not in_strong_zone:
+                return False, f"{strategy_type}: Fisher extremo contrario"
+        else:
+            if hilbert_signal == "LOCAL_MIN":
+                return False, f"{strategy_type}: Hilbert en suelo"
+            if rsi <= float(sym_cfg.get("rsi_oversold", 30)) and not in_strong_zone:
+                return False, f"{strategy_type}: RSI demasiado bajo sin S/R fuerte"
+            if fisher < -2.5 and not in_strong_zone:
+                return False, f"{strategy_type}: Fisher extremo contrario"
+        return True, ""
+
+    if strategy_type in {"MOMENTUM_TREND", "MOMENTUM_SURGE", "TECH_MOMENTUM", "FRANKFURT_BREAKOUT", "RANGE_BREAKOUT_OIL"}:
+        primaries = bullish_primaries if action == "BUY" else bearish_primaries
+        if primaries < 3:
+            return False, f"{strategy_type}: primarios alineados insuficientes ({primaries}/4)"
+        if abs(conf_total) < float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)) * 1.2:
+            return False, f"{strategy_type}: confluencia insuficiente ({conf_total:+.2f})"
+        return True, ""
+
+    if strategy_type in {"TREND_KALMAN", "RISK_CARRY"}:
+        if action == "BUY" and not (kalman_trend == "ALCISTA" and supertrend == 1):
+            return False, f"{strategy_type}: Kalman/SuperTrend no confirman BUY"
+        if action == "SELL" and not (kalman_trend == "BAJISTA" and supertrend == -1):
+            return False, f"{strategy_type}: Kalman/SuperTrend no confirman SELL"
+        return True, ""
+
+    if strategy_type == "DRAGON_EXPLOSION":
+        primaries = bullish_primaries if action == "BUY" else bearish_primaries
+        if primaries < 4:
+            return False, f"{strategy_type}: requiere 4/4 primarios alineados"
+        if abs(conf_total) < 0.8:
+            return False, f"{strategy_type}: confluencia no sniper ({conf_total:+.2f})"
+        return True, ""
+
+    return True, ""
+
+
+def _is_gemini_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
+    plan = _compute_trade_plan(symbol, action, ind, sym_cfg)
+    if plan is None:
+        return False, "⚠️ Tick no disponible", None
+
+    if not is_rr_valid(plan["price"], plan["sl"], plan["tp"]):
+        return False, f"⚖️ R:R inválido ({plan['rr']:.2f})", plan
+
+    passes_filter, filter_reason = _passes_direction_filter(action, ind)
+    if not passes_filter:
+        return False, f"🚫 {filter_reason}", plan
+
+    conf = ind.get("confluence", {})
+    conf_total = float(conf.get("total", 0.0) or 0.0)
+    conf_min = float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3))
+    sniper_aligned = bool(conf.get("sniper_aligned", False))
+    in_strong_zone = bool(getattr(sr_ctx, "in_strong_zone", False))
+    trend = ind.get("h1_trend", "LATERAL")
+    votes = ind.get("trend_votes", {"bull": 0, "bear": 0})
+    vote_edge = (votes.get("bull", 0) - votes.get("bear", 0)) if action == "BUY" else (votes.get("bear", 0) - votes.get("bull", 0))
+    hilbert_signal = ind.get("hilbert", {}).get("signal", "NEUTRAL")
+
+    if action == "BUY":
+        conf_ok = conf_total >= conf_min
+        cycle_ok = hilbert_signal != "LOCAL_MAX"
+        trend_ok = ("ALCISTA" in trend) or vote_edge >= 2
+    else:
+        conf_ok = conf_total <= -conf_min
+        cycle_ok = hilbert_signal != "LOCAL_MIN"
+        trend_ok = ("BAJISTA" in trend) or vote_edge >= 2
+
+    # ── HARD GATE: Sin confluencia suficiente NO se consulta Gemini ──
+    if not conf_ok:
+        return False, (
+            f"🔒 Confluencia insuficiente {action}: "
+            f"conf={conf_total:+.2f} (min={'+'if action=='BUY' else '-'}{conf_min:.2f})"
+        ), plan
+
+    support_ok = sniper_aligned or in_strong_zone or abs(conf_total) >= (conf_min * 1.8)
+    quality_score = sum([cycle_ok, trend_ok, support_ok])
+    min_quality = 2
+
+    if quality_score < min_quality:
+        return False, (
+            f"🧪 Setup débil {action}: q={quality_score}/{min_quality} "
+            f"conf={conf_total:+.2f} votes={vote_edge:+d}"
+        ), plan
+
+    strategy_ok, strategy_reason = _evaluate_strategy_specific_gate(action, ind, sr_ctx, sym_cfg)
+    if not strategy_ok:
+        return False, f"🧭 {strategy_reason}", plan
+
+    return True, "", plan
 
 # ════════════════════════════════════════════════════════════════
 #  MT5 — CONEXIÓN Y DATOS
@@ -308,16 +630,55 @@ def get_system_prompt(sym_cfg: dict) -> str:
     )
 
 
-def ask_gemini(context: str, sym_cfg: dict) -> Optional[dict]:
+def ask_gemini(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
     system_prompt = get_system_prompt(sym_cfg)
-    max_attempts  = 3
-    wait_secs     = [0, 5, 15]
+    global gemini_cooldown_until, gemini_call_cache
+
+    now_ts = time.time()
+    if cache_key and cache_key in gemini_call_cache:
+        _bump_gemini_metric("cache_hits_total")
+        return gemini_call_cache[cache_key]
+
+    if now_ts < gemini_cooldown_until:
+        wait_left = int(max(1, gemini_cooldown_until - now_ts))
+        log.warning(f"[gemini] Cooldown global activo — omitiendo consulta {symbol} ({wait_left}s restantes)")
+        _bump_gemini_metric("cooldown_skips_total")
+        fallback = _build_gemini_fallback_decision(f"Cooldown Gemini activo ({wait_left}s restantes)")
+        if cache_key:
+            gemini_call_cache[cache_key] = fallback
+        return fallback
+
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y-%m-%d %H")
+    day_key = now.strftime("%Y-%m-%d")
+    max_calls_hour = int(getattr(cfg, "GEMINI_MAX_CALLS_PER_HOUR", 0) or 0)
+    max_calls_day = int(getattr(cfg, "GEMINI_MAX_CALLS_PER_DAY", 0) or 0)
+    current_hour_calls = int(gemini_hourly_usage.get(hour_key, 0))
+    current_day_calls = int(gemini_daily_usage.get(day_key, 0))
+
+    if (max_calls_hour > 0 and current_hour_calls >= max_calls_hour) or (
+        max_calls_day > 0 and current_day_calls >= max_calls_day
+    ):
+        limit_reason = (
+            f"Presupuesto Gemini alcanzado (hora {current_hour_calls}/{max_calls_hour}, "
+            f"día {current_day_calls}/{max_calls_day})"
+        )
+        log.warning(f"[gemini] {limit_reason} — omitiendo consulta {symbol}")
+        _bump_gemini_metric("skipped_by_budget_total")
+        fallback = _build_gemini_fallback_decision(limit_reason)
+        if cache_key:
+            gemini_call_cache[cache_key] = fallback
+        return fallback
+
+    max_attempts = 2
+    wait_secs = [0, 2]
 
     for attempt in range(max_attempts):
         if wait_secs[attempt] > 0:
             log.info(f"[gemini] Reintentando en {wait_secs[attempt]}s (intento {attempt+1}/{max_attempts})...")
             time.sleep(wait_secs[attempt])
         try:
+            _bump_gemini_metric("api_calls_total")
             response = gemini_client.models.generate_content(
                 model="gemini-2.5-flash",
                 contents=[
@@ -331,25 +692,53 @@ def ask_gemini(context: str, sym_cfg: dict) -> Optional[dict]:
                 raw = raw.split("```json")[1].split("```")[0].strip()
             elif "```" in raw:
                 raw = raw.split("```")[1].strip()
-            return json.loads(raw)
+            payload = json.loads(raw)
+            _set_last_gemini_analysis(symbol, payload)
+            _bump_gemini_metric("api_success_total")
+            if cache_key:
+                gemini_call_cache[cache_key] = payload
+            return payload
 
         except json.JSONDecodeError as e:
             log.error(f"[gemini] JSON inválido (intento {attempt+1}): {e}")
-            return None
+            _bump_gemini_metric("errors_total")
+            fallback = _build_gemini_fallback_decision("Gemini devolvió JSON inválido")
+            if cache_key:
+                gemini_call_cache[cache_key] = fallback
+            return fallback
 
         except Exception as e:
             err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                retry_after = _extract_retry_delay_seconds(err_str)
+                gemini_cooldown_until = time.time() + retry_after + 1.0
+                log.error(f"[gemini] Cuota agotada — cooldown global {retry_after:.0f}s")
+                _bump_gemini_metric("quota_hits_total")
+                fallback = _build_gemini_fallback_decision(
+                    f"Cuota Gemini agotada, reintentar tras {retry_after:.0f}s"
+                )
+                if cache_key:
+                    gemini_call_cache[cache_key] = fallback
+                return fallback
             if "503" in err_str or "UNAVAILABLE" in err_str:
                 if attempt < max_attempts - 1:
                     log.warning(f"[gemini] 503 UNAVAILABLE — reintentando...")
                     continue
             elif "404" in err_str or "NOT_FOUND" in err_str:
                 log.error(f"[gemini] Modelo no disponible: {e}")
-                return None
+                _bump_gemini_metric("errors_total")
+                fallback = _build_gemini_fallback_decision("Modelo Gemini no disponible")
+                if cache_key:
+                    gemini_call_cache[cache_key] = fallback
+                return fallback
             log.error(f"[gemini] Error (intento {attempt+1}): {e}")
             if attempt == max_attempts - 1:
-                return None
-    return None
+                _bump_gemini_metric("errors_total")
+                fallback = _build_gemini_fallback_decision("Error transitorio de Gemini")
+                if cache_key:
+                    gemini_call_cache[cache_key] = fallback
+                return fallback
+    return _build_gemini_fallback_decision("Gemini sin respuesta")
 
 
 def build_context(
@@ -358,6 +747,7 @@ def build_context(
     cal_events: list = None,
     scorecard_check = None,
     policy_check = None,
+    trade_plan = None,
 ) -> str:
     price   = ind.get("price", 0)
     hilbert = ind.get("hilbert", {})
@@ -463,6 +853,22 @@ def build_context(
         ]
 
     lines += [
+        "── PLAN DE TRADE PREVIO ──",
+    ]
+    if trade_plan is not None:
+        lines += [
+            f"Dirección candidata: {trade_plan['action']}",
+            f"Entry estimado: {trade_plan['price']:.5f} | SL: {trade_plan['sl']:.5f} | TP: {trade_plan['tp']:.5f}",
+            f"R:R estimado: {trade_plan['rr']:.2f}",
+            "",
+        ]
+    else:
+        lines += [
+            "Plan no disponible",
+            "",
+        ]
+
+    lines += [
         "── NOTICIAS RSS ──",
         format_news_for_prompt(news_ctx),
         "",
@@ -508,6 +914,56 @@ def build_context(
         f"Estrategia: {sym_cfg.get('strategy_type','HYBRID')}",
     ]
     return "\n".join(lines)
+
+
+def build_lateral_context(
+    symbol: str,
+    ind: dict,
+    sr_ctx,
+    news_ctx,
+    sym_cfg: dict,
+    cal_events: list,
+    candidate_payloads: dict,
+) -> str:
+    base_mem = next(iter(candidate_payloads.values()))["mem_check"]
+    lines = [
+        "── CANDIDATOS LATERALES ──",
+        "Compara BUY y SELL como candidatos completos. Si ninguno domina claramente, responde HOLD.",
+    ]
+
+    for action in ("BUY", "SELL"):
+        payload = candidate_payloads.get(action)
+        if payload is None:
+            continue
+        scorecard = payload["scorecard"]
+        policy = payload["policy"]
+        mem_check = payload["mem_check"]
+        plan = payload["trade_plan"]
+        lines += [
+            f"[{action}] listo_para_gemini={payload['candidate_ok']}",
+            f"  gate: {payload['candidate_reason'] or 'OK'}",
+            f"  memory: block={mem_check.should_block} adj={mem_check.confidence_adj:+.1f} detail={mem_check.warning_msg}",
+            f"  scorecard: block={scorecard.should_block} wr={scorecard.win_rate:.1f}% n={scorecard.sample_size} reason={scorecard.reason}",
+            f"  policy: block={policy.should_block} score={policy.policy_score:.3f} n={policy.sample_size} reason={policy.reason}",
+        ]
+        if plan is not None:
+            lines.append(
+                f"  plan: entry={plan['price']:.5f} sl={plan['sl']:.5f} tp={plan['tp']:.5f} rr={plan['rr']:.2f}"
+            )
+        lines.append("")
+
+    return build_context(
+        symbol=symbol,
+        ind=ind,
+        sr_ctx=sr_ctx,
+        news_ctx=news_ctx,
+        mem_check=base_mem,
+        sym_cfg=sym_cfg,
+        cal_events=cal_events,
+        scorecard_check=None,
+        policy_check=None,
+        trade_plan=None,
+    ) + "\n\n" + "\n".join(lines)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -589,38 +1045,12 @@ def _calc_pips_instrument(deal, symbol: str) -> float:
 #  FIX 11 — TRAILING STOP PROGRESIVO (reemplaza _check_breakeven)
 # ════════════════════════════════════════════════════════════════
 
-# Estado del trailing por ticket: qué etapa alcanzó
-_trail_stage: dict = {}  # ticket → int (0=sin activar, 1=BE, 2=trail1.5, 3=trail1.0, 4=tight)
+# Estado del trailing por ticket: nivel de protección alcanzado
+_trail_stage: dict = {}
 
 
 def _manage_trailing_stop(pos: dict, sym_cfg: dict):
-    """
-    FIX 11 — Trailing stop progresivo en 5 etapas:
-
-    ETAPA 0 (0 – 1.5×ATR mov favorable):
-        NO tocar el SL. Dejar que el precio respire.
-        El error anterior era activar BE demasiado pronto (1.0×ATR),
-        lo que causaba que el ruido normal cerrara el 97% de trades en BE.
-
-    ETAPA 1 (1.5 – 2.5×ATR mov favorable):
-        Mover SL a breakeven + buffer de 0.1×ATR.
-        El capital queda protegido pero con margen para respirar.
-
-    ETAPA 2 (2.5 – 4×ATR mov favorable):
-        Trail dinámico: SL se mueve a 1.5×ATR del precio actual.
-        Nunca retrocede. Lockea ~1×ATR de ganancia.
-
-    ETAPA 3 (>4×ATR mov favorable):
-        Trail más ajustado: SL a 1.0×ATR del precio actual.
-        Lockea ~3×ATR de ganancia.
-
-    ETAPA 4 (>80% del camino hacia TP):
-        Trail muy ajustado: SL a 0.5×ATR del precio actual.
-        Maximiza captura cuando estamos cerca del TP.
-
-    NUNCA retrocede el SL (solo se mueve en dirección favorable).
-    NUNCA mueve el SL por debajo del precio de apertura (siempre en ganancia).
-    """
+    """Trailing proporcional por progreso de TP con ratchet y anti-SL-hunting."""
     global last_action, symbol_status_cache
 
     ticket    = pos["ticket"]
@@ -628,8 +1058,8 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     direction = "BUY" if pos["type"] == 0 else "SELL"
     open_p    = pos["price_open"]
     cur_p     = pos["price_current"]
-    sl        = pos["sl"]
-    tp        = pos["tp"]
+    sl        = float(pos.get("sl", 0.0) or 0.0)
+    tp        = float(pos.get("tp", 0.0) or 0.0)
 
     # Obtener ATR del cache de indicadores
     ind     = ind_cache.get(symbol, {})
@@ -642,132 +1072,101 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     if sym_info is None:
         return
     point = sym_info.point or 0.00001
+    candle_stamp = str(ind.get("entry_candle_time", "") or "")
 
-    atr_pts = atr_val / point
+    favorable_move = (cur_p - open_p) if direction == "BUY" else (open_p - cur_p)
+    if favorable_move <= 0:
+        _profit_candle_count[ticket] = 0
+        _profit_candle_last_seen.pop(ticket, None)
+        return
+    profit_price = abs(cur_p - open_p)
 
-    # ── Calcular movimiento favorable en puntos ──
-    if direction == "BUY":
-        move_pts   = (cur_p - open_p) / point
-        tp_total   = (tp - open_p) / point  if tp > open_p else 0
-        tp_remaining = (tp - cur_p) / point if tp > cur_p  else 0
-    else:
-        move_pts   = (open_p - cur_p) / point
-        tp_total   = (open_p - tp) / point  if tp < open_p else 0
-        tp_remaining = (cur_p - tp) / point if tp < cur_p  else 0
-
-    # Si el precio está en pérdida o exactamente en entrada → no hacer nada
-    if move_pts <= 0:
+    if candle_stamp and _profit_candle_last_seen.get(ticket) != candle_stamp:
+        _profit_candle_count[ticket] = _profit_candle_count.get(ticket, 0) + 1
+        _profit_candle_last_seen[ticket] = candle_stamp
+    if _profit_candle_count[ticket] < 2:
         return
 
-    # Calcular progreso hacia TP (0.0 = entrada, 1.0 = TP)
-    tp_progress = 1.0 - (tp_remaining / max(tp_total, 1))
+    trade_mode = trade_mode_cache.get(ticket)
+    if not trade_mode:
+        trade_mode = get_adaptive_trail_params(sym_cfg, direction)
+        trade_mode_cache[ticket] = trade_mode
+
+    be_atr_mult = float(trade_mode.get("be_atr_mult", sym_cfg.get("be_atr_mult", 2.0)))
+    be_buffer_mult = float(trade_mode.get("be_buffer_mult", 0.5))
+    be_threshold_price = atr_val * be_atr_mult
+    if profit_price < be_threshold_price:
+        return
+
+    if tp != 0:
+        tp_total = abs(tp - open_p)
+        if direction == "BUY":
+            tp_remaining = max(tp - cur_p, 0.0)
+        else:
+            tp_remaining = max(cur_p - tp, 0.0)
+        tp_progress = 1.0 - (tp_remaining / tp_total) if tp_total > 0 else 0.0
+    else:
+        tp_progress = 0.0
     tp_progress = max(0.0, min(1.0, tp_progress))
 
-    # ── be_atr_mult del símbolo: cuánto necesita moverse para activar BE ──
-    # FIX: ahora el mínimo es 1.5 (no 1.0). Configurado en config.py por símbolo.
-    be_atr_mult = sym_cfg.get("be_atr_mult", getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5))
-    be_threshold_pts = be_atr_mult * atr_pts
+    stage_definitions = [
+        (0.85, 0.70, 5, "Lock 70%"),
+        (0.70, 0.50, 4, "Lock 50%"),
+        (0.50, 0.35, 3, "Lock 35%"),
+        (0.30, 0.15, 2, "Lock 15%"),
+    ]
 
-    current_stage = _trail_stage.get(ticket, 0)
+    lock_pct = 0.0
+    new_stage = 1
+    stage_label = "BE buffer"
+    for min_progress, pct, stage_num, label in stage_definitions:
+        if tp_progress >= min_progress:
+            lock_pct = pct
+            new_stage = stage_num
+            stage_label = label
+            break
 
-    # ── ETAPA 0: Demasiado pronto — no tocar ──
-    if move_pts < be_threshold_pts:
-        return
-
-    # ── Determinar nueva etapa y trail distance ──
-    new_sl = None
-    new_stage = current_stage
-
-    if tp_progress >= 0.80:
-        # ETAPA 4: Cerca del TP — trail muy ajustado (0.5×ATR)
-        trail_pts = 0.5 * atr_pts
-        new_stage = 4
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 4.0 * atr_pts:
-        # ETAPA 3: >4×ATR de ganancia — trail 1.0×ATR
-        trail_pts = 1.0 * atr_pts
-        new_stage = 3
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 2.5 * atr_pts:
-        # ETAPA 2: >2.5×ATR — trail 1.5×ATR
-        trail_pts = 1.5 * atr_pts
-        new_stage = 2
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
+    if lock_pct > 0:
+        locked_profit = profit_price * lock_pct
+        new_sl = open_p + locked_profit if direction == "BUY" else open_p - locked_profit
     else:
-        # ETAPA 1: Activar breakeven (abierto tras 1.5×ATR)
-        # Mover SL a precio de apertura + pequeño buffer (0.1×ATR)
-        buffer_pts = max(1.0, atr_pts * 0.10)
-        new_stage  = 1
-        if direction == "BUY":
-            new_sl = open_p + buffer_pts * point
-        else:
-            new_sl = open_p - buffer_pts * point
+        buffer_price = max(point, atr_val * be_buffer_mult)
+        new_sl = open_p + buffer_price if direction == "BUY" else open_p - buffer_price
 
-    if new_sl is None:
-        return
+    digits = int(getattr(sym_info, "digits", 5) or 5)
+    new_sl = round(new_sl, digits)
 
-    new_sl = round(new_sl, 5)
-
-    # ── Regla crítica: NUNCA retroceder el SL ──
     if direction == "BUY":
-        if new_sl <= sl:
-            return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por debajo de la apertura en etapas >= 2
-        if new_stage >= 2:
-            min_sl = open_p + (atr_pts * 0.05) * point
-            new_sl = max(new_sl, min_sl)
+        if sl > 0 and new_sl <= sl:
+            return
     else:
-        if new_sl >= sl:
-            return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por encima de la apertura en etapas >= 2
-        if new_stage >= 2:
-            max_sl = open_p - (atr_pts * 0.05) * point
-            new_sl = min(new_sl, max_sl)
+        if sl > 0 and new_sl >= sl:
+            return
 
-    # ── Verificar que sigue siendo diferente al SL actual ──
-    diff_pts = abs(new_sl - sl) / point
+    sl_reference = sl if sl > 0 else open_p
+    diff_pts = abs(new_sl - sl_reference) / point
     if diff_pts < 0.5:
-        return  # Diferencia mínima insignificante
+        return
 
     # ── Mover SL ──
     if move_sl(ticket, new_sl):
         prev_stage = _trail_stage.get(ticket, 0)
         _trail_stage[ticket] = new_stage
 
-        profit_pips = move_pts
-        stage_names = {
-            1: "BE activado",
-            2: "Trail 1.5×ATR",
-            3: "Trail 1.0×ATR",
-            4: "Trail 0.5×ATR (TP cercano)",
-        }
-        stage_label = stage_names.get(new_stage, f"Etapa {new_stage}")
-        locked_pts  = (new_sl - open_p) / point if direction == "BUY" else (open_p - new_sl) / point
+        profit_pts = profit_price / point
+        locked_pts = (new_sl - open_p) / point if direction == "BUY" else (open_p - new_sl) / point
 
-        if new_stage == 1 and prev_stage < 1:
-            # Primera vez que se activa BE — notificar
-            notify_breakeven(symbol, ticket, new_sl, profit_pips)
+        if prev_stage < 1:
+            notify_breakeven(symbol, ticket, new_sl, profit_pts)
             log.info(
                 f"[Trail] 🛡 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | SL→{new_sl:.5f}"
+                f"— {stage_label} | profit_cycles={_profit_candle_count[ticket]} "
+                f"| TP%={tp_progress:.0%} | SL→{new_sl:.5f}"
             )
         else:
-            # Trailing update — log sin notificación Telegram
             log.info(
                 f"[Trail] 📈 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | "
+                f"— {stage_label} | cycles={_profit_candle_count[ticket]} | "
                 f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
             )
 
@@ -887,6 +1286,10 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
                 closing_deals[pid] = d
 
     for ticket in closed:
+        _trail_stage.pop(ticket, None)
+        trade_mode_cache.pop(ticket, None)
+        _profit_candle_count.pop(ticket, None)
+        _profit_candle_last_seen.pop(ticket, None)
         deal = closing_deals.get(ticket)
 
         if deal is None:
@@ -1150,6 +1553,7 @@ def _process_symbol(
     open_positions: list, balance: float, equity: float,
 ):
     global last_action, ind_cache, sr_cache, symbol_status_cache
+    global shared_news_cache, shared_news_last_update
 
     equity_guard_min_pct = float(getattr(cfg, "EQUITY_GUARD_MIN_PCT", 70.0))
     equity_floor = balance * (equity_guard_min_pct / 100.0) if balance and balance > 0 else 0.0
@@ -1193,7 +1597,7 @@ def _process_symbol(
         _set_symbol_status(symbol, "⚠️ Datos insuficientes de MT5")
         return
 
-    ind = compute_all(df_h1, symbol, sym_cfg)
+    ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
     ind_cache[symbol] = ind
 
     if has_bot_position:
@@ -1242,9 +1646,19 @@ def _process_symbol(
     cal_events_nearby = eco_calendar.get_events_for_symbol(symbol, sym_cfg, minutes_ahead=120)
 
     now_ts_news = time.time()
+    if shared_news_cache is None or (now_ts_news - shared_news_last_update) > cfg.NEWS_REFRESH_MIN * 60:
+        merged_topics = ",".join(sorted({
+            topic.strip()
+            for cfg_item in cfg.SYMBOLS.values()
+            for topic in str(cfg_item.get("news_topics", "economy_monetary,economy_macro")).split(",")
+            if topic.strip()
+        }))
+        shared_news_cache = build_shared_news_context(merged_topics)
+        shared_news_last_update = now_ts_news
+
     if symbol not in news_cache or (now_ts_news - news_last_update.get(symbol, 0)) > cfg.NEWS_REFRESH_MIN * 60:
-        news_ctx = build_news_context(symbol, sym_cfg)
-        news_cache[symbol]       = news_ctx
+        news_ctx = derive_symbol_news_context(symbol, sym_cfg, shared_news_cache)
+        news_cache[symbol] = news_ctx
         news_last_update[symbol] = now_ts_news
     else:
         news_ctx = news_cache[symbol]
@@ -1266,6 +1680,7 @@ def _process_symbol(
         return
 
     h1_trend = ind.get("h1_trend", "LATERAL")
+    candle_stamp = _get_last_candle_stamp(df_entry)
     if "BAJISTA" in h1_trend:
         mem_direction = "SELL"
     elif "ALCISTA" in h1_trend:
@@ -1309,26 +1724,52 @@ def _process_symbol(
                 f"BUY={policy_buy.reason} | SELL={policy_sell.reason}"
             )
             return
-        selected = max(viable, key=lambda x: (x[4].policy_score, x[2].confidence_adj))
-        _, features, mem_check, selected_scorecard, selected_policy = selected
-        if mem_check.should_block:
-            last_action = f"🧠 Memoria bloqueó {symbol}"
-            _set_symbol_status(symbol, f"🧠 {mem_check.warning_msg[:48]}")
-            _notify_memory_block_once(symbol, mem_check)
+        candidate_payloads = {}
+        ready_actions = []
+        for action, features, mem_check, scorecard, policy in viable:
+            candidate_ok, candidate_reason, trade_plan = _is_gemini_candidate_ready(
+                symbol, action, ind, sr_ctx, sym_cfg
+            )
+            candidate_payloads[action] = {
+                "features": features,
+                "mem_check": mem_check,
+                "scorecard": scorecard,
+                "policy": policy,
+                "trade_plan": trade_plan,
+                "candidate_ok": candidate_ok,
+                "candidate_reason": candidate_reason,
+            }
+            if candidate_ok:
+                ready_actions.append(action)
+
+        if not ready_actions:
+            _bump_gemini_metric("skipped_by_gate_total")
+            reasons = " | ".join(
+                f"{action}:{payload['candidate_reason']}" for action, payload in candidate_payloads.items()
+            )
+            _set_symbol_status(symbol, reasons[:48])
+            last_action = f"🧪 Lateral sin candidato listo {symbol}"
+            log.info(f"[{symbol}] Lateral sin candidato listo — {reasons}")
             return
-        else:
-            memory_block_notified.pop(symbol, None)
-        # Scorecard en ruta LATERAL: se evaluará después de la respuesta Gemini
-        # porque la dirección final (BUY/SELL) aún no está definida.
-        # LATERAL path: direction unknown before Gemini — the post-Gemini gate
-        # in _execute_decision will apply the confluence veto after Gemini responds.
-        context  = build_context(
-            symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
-            cal_events_nearby, selected_scorecard, selected_policy,
+
+        memory_block_notified.pop(symbol, None)
+        cache_key = _build_gemini_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
+        context = build_lateral_context(
+            symbol=symbol,
+            ind=ind,
+            sr_ctx=sr_ctx,
+            news_ctx=news_ctx,
+            sym_cfg=sym_cfg,
+            cal_events=cal_events_nearby,
+            candidate_payloads=candidate_payloads,
         )
-        decision = ask_gemini(context, sym_cfg)
-        _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
-                          mem_check, features, balance, df_entry)
+        decision = ask_gemini(symbol, context, sym_cfg, cache_key=cache_key)
+        base_payload = candidate_payloads[ready_actions[0]]
+        _execute_decision(
+            symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
+            base_payload["mem_check"], base_payload["features"], balance, df_entry,
+            candidate_payloads=candidate_payloads,
+        )
         return
 
     features  = build_features(symbol, mem_direction, ind, sr_ctx, news_ctx, sym_cfg)
@@ -1381,11 +1822,22 @@ def _process_symbol(
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
+    candidate_ok, candidate_reason, trade_plan = _is_gemini_candidate_ready(
+        symbol, mem_direction, ind, sr_ctx, sym_cfg
+    )
+    if not candidate_ok:
+        _bump_gemini_metric("skipped_by_gate_total")
+        _set_symbol_status(symbol, candidate_reason[:48])
+        last_action = f"{candidate_reason} {symbol}"
+        log.info(f"[{symbol}] {candidate_reason} — Gemini no consultado")
+        return
+
+    cache_key = _build_gemini_cache_key(symbol, mem_direction, candle_stamp, ind)
     context  = build_context(
         symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
-        cal_events_nearby, scorecard, policy,
+        cal_events_nearby, scorecard, policy, trade_plan,
     )
-    decision = ask_gemini(context, sym_cfg)
+    decision = ask_gemini(symbol, context, sym_cfg, cache_key=cache_key)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
 
@@ -1435,6 +1887,7 @@ def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
 def _execute_decision(
     symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
     mem_check, features, balance, df_entry,
+    candidate_payloads=None,
 ):
     """Valida la decisión de Gemini y aplica filtro anti-contra-tendencia."""
     global last_action
@@ -1447,6 +1900,20 @@ def _execute_decision(
     action     = decision.get("decision", "HOLD")
     confidence = int(decision.get("confidence", 0))
     reason     = decision.get("reason", "")
+
+    if action in ("BUY", "SELL") and candidate_payloads is not None:
+        payload = candidate_payloads.get(action)
+        if payload is None or not payload.get("candidate_ok", False):
+            msg = f"🧪 Candidato {action} no pasó gates internos"
+            _set_symbol_status(symbol, msg[:48])
+            last_action = f"{msg} {symbol}"
+            log.info(f"[{symbol}] {msg} — decisión forzada a HOLD")
+            return
+
+    if candidate_payloads and action in candidate_payloads:
+        payload = candidate_payloads[action]
+        mem_check = payload["mem_check"]
+        features = payload["features"]
 
     log.info(f"[{symbol}] 🤖 {action} conf={confidence} | {reason[:80]}")
 
@@ -1555,7 +2022,7 @@ def _execute_decision(
     # ── FASE 2: Kelly position sizing ────────────────────────────
     # Usa Kelly fraccionado cuando hay suficientes trades históricos.
     # Si no, vuelve automáticamente al sizing estándar.
-    mem_stats  = get_memory_stats()
+    mem_stats  = get_memory_stats(symbol)
     sym_trades = mem_stats.get("total", 0)
     win_rate   = mem_stats.get("win_rate", 0.0) / 100.0  # convertir % → fracción
     kelly_min_trades = getattr(cfg, "KELLY_MIN_TRADES", 30)
@@ -1591,6 +2058,9 @@ def _execute_decision(
 
     # Inicializar estado de trail para este ticket
     _trail_stage[ticket] = 0
+    _profit_candle_count[ticket] = 0
+    _profit_candle_last_seen[ticket] = None
+    trade_mode_cache[ticket] = get_adaptive_trail_params(sym_cfg, action)
 
     direction_features = build_features(symbol, action, ind, sr_ctx, news_ctx, sym_cfg)
     setup_id = derive_setup_id(ind, action)
@@ -1672,11 +2142,15 @@ def run():
 
     mem_stats = get_memory_stats()
     notify_bot_started(balance, equity, mem_stats, list(cfg.SYMBOLS.keys()))
+    web_host = str(getattr(cfg, "WEB_DASHBOARD_HOST", "127.0.0.1"))
+    web_port = int(getattr(cfg, "WEB_DASHBOARD_PORT", 8765))
+    start_web_dashboard(_get_web_status_snapshot, host=web_host, port=web_port, logger=log)
+    _update_web_status_snapshot(balance, equity, [])
     log.info(
         f"✅ Bot v6.5 iniciado | Balance=${balance:,.2f} | "
         f"{len(cfg.SYMBOLS)} símbolos | Modo 24/5 | "
         f"Cooldown={SYMBOL_COOLDOWN_SEC}s | "
-        f"Trail: BE@1.5×ATR → Trail@2.5× → Trail@4× → Tight@TP80%"
+        f"Trail: proporcional por TP progress | Web: http://{web_host}:{web_port}"
     )
 
     for pending in get_pending_trades():
@@ -1702,7 +2176,24 @@ def run():
                 log.warning("[main] ⛔ Límite diario alcanzado")
                 last_action = "⛔ Límite diario alcanzado"
                 _notify_daily_loss_guard_once(daily_pnl, balance, float(getattr(cfg, "MAX_DAILY_LOSS", 0.05)))
-                time.sleep(cfg.LOOP_SLEEP_SEC * 5); continue
+
+                open_positions = get_open_positions()
+                for pos in open_positions:
+                    symbol = pos.get("symbol", "")
+                    sym_cfg_data = cfg.SYMBOLS.get(symbol)
+                    if not symbol or sym_cfg_data is None or symbol in ind_cache:
+                        continue
+                    df_entry = get_candles(symbol, cfg.TF_ENTRY, TF_CANDLES.get(cfg.TF_ENTRY, 300))
+                    df_h1 = get_candles(symbol, cfg.TF_TREND, TF_CANDLES.get(cfg.TF_TREND, 150))
+                    if df_entry is None or df_h1 is None or len(df_entry) < 60:
+                        continue
+                    ind_cache[symbol] = compute_all(df_h1, symbol, sym_cfg_data, df_entry=df_entry)
+
+                manage_positions(open_positions, ind_cache)
+                _update_web_status_snapshot(balance, equity, open_positions)
+                _render_dashboard(balance, equity, open_positions)
+                time.sleep(cfg.LOOP_SLEEP_SEC)
+                continue
             else:
                 daily_loss_guard_notified = 0.0
 
@@ -1723,6 +2214,7 @@ def run():
 
             open_positions = get_open_positions()
             manage_positions(open_positions, ind_cache)
+            _update_web_status_snapshot(balance, equity, open_positions)
             _render_dashboard(balance, equity, open_positions)
 
         except Exception as e:

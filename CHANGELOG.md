@@ -4,6 +4,98 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-26 19:10 UTC] - FASE 1/2: Trailing proporcional v6.9 + Web Dashboard asíncrono
+
+### main.py
+- Refactorizada `_manage_trailing_stop(...)` al esquema proporcional por `tp_progress`:
+  - `<30%` → BE con buffer mínimo basado en `be_buffer_mult`
+  - `>=30%` → bloquea `15%` de la ganancia actual
+  - `>=50%` → bloquea `35%`
+  - `>=70%` → bloquea `50%`
+  - `>=85%` → bloquea `70%`
+- El cálculo de SL ahora usa distancia real de precio (`profit_price`) y ratchet estricto:
+  nunca retrocede matemáticamente y exige diferencia mínima de `0.5` puntos antes de modificar en MT5.
+- Añadido diccionario `_profit_candle_count` por ticket: el trailing/BE solo activa tras `2` ciclos consecutivos en profit; si el trade vuelve a negativo, el contador se reinicia.
+- Añadido `trade_mode_cache` por ticket para persistir parámetros adaptativos de trailing y asimetría BUY/SELL.
+- Integrado snapshot thread-safe del estado del bot y arranque de dashboard web daemon antes del loop infinito.
+- `ask_gemini(...)` ahora guarda el último análisis útil para exponerlo por API.
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- Añadido `get_adaptive_trail_params(sym_cfg, direction)` que retorna solo:
+  - `be_atr_mult`
+  - `be_buffer_mult`
+- SELL aplica mitigación institucional: `be_atr_mult × 0.9` y buffer más estrecho (`0.35×ATR` por defecto).
+- Limpieza técnica: eliminado import innecesario de `time` y normalización de mensajes para convertir entidades HTML como `&amp;` a `&`.
+- **[Agente: GitHub Copilot]**
+
+### modules/web_dashboard.py
+- Nuevo dashboard web asíncrono en Flask, servido desde thread daemon.
+- Endpoints:
+  - `/` → interfaz HTML/CSS/JS dark mode
+  - `/api/status` → snapshot JSON del bot con balance, equity, posiciones activas y último análisis de Gemini
+- Frontend con polling ligero cada `2500 ms` y badges visuales LONG/SHORT.
+- **[Agente: GitHub Copilot]**
+
+### requirements.txt
+- Añadida dependencia `Flask>=3.0.0` para el dashboard web.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 21:50 UTC] - Optimización de cuota Gemini y ciclo principal
+
+### main.py
+- Añadido gate determinístico previo a Gemini con `_is_gemini_candidate_ready(...)`:
+  Gemini solo se consulta cuando el candidato ya pasó filtro direccional, `R:R`, confluencia mínima, ciclo Hilbert y calidad básica de setup.
+- Añadidas reglas específicas por `strategy_type` para endurecer el gate previo según familia de estrategia (ciclo, momentum, Kalman, Dragon).
+- Añadido caché por símbolo/dirección/vela para no repetir la misma consulta varias veces sobre el mismo setup.
+- Añadido cooldown global ante `429 RESOURCE_EXHAUSTED`: se parsea el `retryDelay` y se bloquean nuevas consultas hasta que venza, evitando que el ciclo se alargue varios minutos por reintentos inútiles.
+- `ask_gemini(...)` reduce reintentos normales y deja de insistir cuando la cuota ya está agotada.
+- Añadidas métricas internas de uso Gemini: llamadas reales, éxitos, cache hits, filtros por gate, cooldown skips, cuotas agotadas y fallback holds.
+- `build_context(...)` ahora adjunta el plan de trade estimado (entry/SL/TP/RR) solo cuando el setup ya pasó el gate previo.
+- **[Agente: GitHub Copilot]**
+
+### modules/web_dashboard.py
+- El dashboard web ahora muestra métricas de uso de Gemini y ventana de cooldown activa, para verificar visualmente el ahorro de cuota.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 22:20 UTC] - Correcciones sniper estructurales (ronda 1)
+
+### modules/indicators.py
+- `compute_all(...)` ahora puede recibir `df_entry` y usa el timeframe de entrada para calcular microestructura sniper (`POC`, `Session VWAP`, `FVG`, `micro_score`).
+- Añadidos `entry_price` y `entry_candle_time` al contexto para sincronizar trailing y validaciones con la vela real de ejecución.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- `_process_symbol(...)` pasa `df_entry` a `compute_all(...)`, evitando que el Pilar 3 quede anclado a H1.
+- La regla anti-SL-hunting ya no cuenta vueltas del loop: ahora `_profit_candle_count` avanza solo cuando cambia `entry_candle_time` y el trade sigue en profit.
+- Añadido `_profit_candle_last_seen` para contar velas únicas en profit por ticket.
+- Integrado contexto de noticias compartido globalmente: se hace un fetch agregado y luego se deriva por símbolo, evitando llamadas duplicadas por activo.
+- **[Agente: GitHub Copilot]**
+
+### modules/news_engine.py
+- Añadidos `build_shared_news_context(...)` y `derive_symbol_news_context(...)` para separar la descarga global de noticias de la interpretación específica por símbolo.
+- `build_news_context(...)` queda como wrapper compatible.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-03-26 22:40 UTC] - Correcciones sniper estructurales (ronda 2)
+
+### modules/neural_brain.py
+- `get_memory_stats(...)` ahora acepta filtro opcional por símbolo para métricas locales de rendimiento/aprendizaje.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Kelly position sizing ahora usa métricas por símbolo en vez de estadísticas globales del bot.
+- La ruta `LATERAL` deja de preseleccionar una sola dirección antes de Gemini.
+- BUY y SELL se mantienen como candidatos completos hasta el final, con contexto comparativo vía `build_lateral_context(...)`.
+- `_execute_decision(...)` ya puede resolver el `mem_check` y `features` correctos según la dirección final elegida por Gemini en mercado lateral.
+- **[Agente: GitHub Copilot]**
+
 ## [2026-03-26 17:58 UTC] - FASE 3: Scorecard jerárquico por activo (pre-LLM gate)
 
 ### config.py

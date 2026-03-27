@@ -84,7 +84,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.0,
         "tp_atr_mult":    4.0,
-        "be_atr_mult":    2.5,   # BE cuando precio se mueve 1.2×ATR en favor
+        "be_atr_mult":    2.8,
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 7,
@@ -121,7 +121,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    1.6,
         "tp_atr_mult":    3.2,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
@@ -158,7 +158,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    1.5,
         "tp_atr_mult":    3.0,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.2,
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
@@ -194,7 +194,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.0,
         "tp_atr_mult":    5.0,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   32,
         "rsi_overbought": 68,
         "min_confidence": 6,
@@ -230,7 +230,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    1.8,
         "tp_atr_mult":    3.6,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.2,
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
@@ -265,7 +265,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    3.0,
         "tp_atr_mult":    6.0,
-        "be_atr_mult":    2.5,
+        "be_atr_mult":    2.8,
         "rsi_oversold":   28,
         "rsi_overbought": 72,
         "min_confidence": 7,
@@ -299,7 +299,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.5,
         "tp_atr_mult":    5.0,
-        "be_atr_mult":    2.5,
+        "be_atr_mult":    2.8,
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 7,
@@ -335,7 +335,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.0,
         "tp_atr_mult":    4.0,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   32,
         "rsi_overbought": 68,
         "min_confidence": 7,
@@ -372,7 +372,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    1.8,
         "tp_atr_mult":    3.6,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   33,
         "rsi_overbought": 67,
         "min_confidence": 6,
@@ -410,7 +410,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.0,
         "tp_atr_mult":    4.0,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
@@ -445,7 +445,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    2.2,
         "tp_atr_mult":    4.4,
-        "be_atr_mult":    2.0,
+        "be_atr_mult":    2.2,
         "rsi_oversold":   32,
         "rsi_overbought": 68,
         "min_confidence": 6,
@@ -481,7 +481,7 @@ SYMBOLS = {
         "session_end":    24,
         "sl_atr_mult":    4.0,
         "tp_atr_mult":    8.0,
-        "be_atr_mult":    3.0,
+        "be_atr_mult":    3.3,
         "rsi_oversold":   28,
         "rsi_overbought": 72,
         "min_confidence": 7,
@@ -515,7 +515,7 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
-SYMBOL_COOLDOWN_SEC = 300
+SYMBOL_COOLDOWN_SEC = 180
 
 MAX_DAILY_LOSS      = 0.05   # 5% pérdida máxima diaria
 
@@ -584,7 +584,7 @@ MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
 
 # Confluence Matrix: umbrales para el score ponderado de 3 pilares
 # [-3, +3] — mayor número = requisito más estricto para operar
-CONFLUENCE_MIN_SCORE         = 0.3   # Score mínimo absoluto para permitir entrada
+CONFLUENCE_MIN_SCORE         = 0.25  # Score mínimo absoluto para permitir entrada
 # (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
 # Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
 # → el símbolo muestra "confluencia débil" pero aún se pregunta a Gemini.
@@ -615,9 +615,9 @@ CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad
 # Historial máximo (últimos trades cerrados por símbolo) para evaluar setup.
 SCORECARD_LOOKBACK_TRADES = 300
 # Muestra mínima (WIN+LOSS, BE excluido) para considerar estadística confiable.
-SCORECARD_MIN_SAMPLE      = 8
+SCORECARD_MIN_SAMPLE      = 6
 # Win rate mínimo (%) exigido para permitir el setup (si hay muestra suficiente).
-SCORECARD_MIN_WIN_RATE    = 52.0
+SCORECARD_MIN_WIN_RATE    = 50.0
 # Endurecimiento dinámico: +1 punto de confianza mínima si scorecard es débil.
 SCORECARD_MIN_CONF_BONUS  = 1
 
@@ -627,14 +627,14 @@ SCORECARD_MIN_CONF_BONUS  = 1
 # Ventana histórica para métricas de policy por activo/setup.
 POLICY_LOOKBACK_TRADES    = 300
 # Muestra mínima para considerar estable el policy score.
-POLICY_MIN_SAMPLE         = 10
+POLICY_MIN_SAMPLE         = 8
 # Pesos del ranking (deben sumar ~1.0).
 POLICY_WEIGHT_WR          = 0.40
 POLICY_WEIGHT_PF          = 0.25
 POLICY_WEIGHT_REWARD      = 0.20
 POLICY_WEIGHT_SAMPLE      = 0.15
 # Umbral de bloqueo duro cuando hay muestra suficiente.
-POLICY_MIN_SCORE          = 0.45
+POLICY_MIN_SCORE          = 0.40
 # Endurecimiento de confianza si policy score es débil.
 POLICY_MIN_CONF_BONUS     = 1
 
@@ -659,3 +659,17 @@ EQUITY_GUARD_MIN_PCT      = 70.0
 #  CICLO PRINCIPAL
 # ================================================================
 LOOP_SLEEP_SEC = 60
+
+# ================================================================
+#  WEB DASHBOARD
+# ================================================================
+WEB_DASHBOARD_HOST = "127.0.0.1"
+WEB_DASHBOARD_PORT = 8765
+
+# ================================================================
+#  PRESUPUESTO GEMINI (CONTROL DURO DE COSTO)
+# ================================================================
+# 0 = desactivado. Si se define >0, el bot no hará más llamadas una vez
+# alcanzado el límite y usará fallback HOLD para evitar gasto excedente.
+GEMINI_MAX_CALLS_PER_HOUR = 80
+GEMINI_MAX_CALLS_PER_DAY  = 600

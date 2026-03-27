@@ -60,10 +60,13 @@ def _send(text: str, parse_mode: str = "HTML"):
             },
             timeout=10,
         )
+        if r.status_code == 200:
+            log.info("[telegram] ✅ Mensaje enviado")
+            return True
         if r.status_code != 200:
             log.warning(f"[telegram] HTTP {r.status_code}: {r.text[:100]}")
             # Retry sin formato HTML
-            requests.post(
+            r2 = requests.post(
                 f"https://api.telegram.org/bot{cfg.TELEGRAM_TOKEN}/sendMessage",
                 json={
                     "chat_id": cfg.TELEGRAM_CHAT_ID,
@@ -71,8 +74,14 @@ def _send(text: str, parse_mode: str = "HTML"):
                 },
                 timeout=10,
             )
+            if r2.status_code == 200:
+                log.info("[telegram] ✅ Mensaje enviado (fallback sin HTML)")
+                return True
+            log.warning(f"[telegram] Fallback HTTP {r2.status_code}: {r2.text[:100]}")
+            return False
     except Exception as e:
         log.warning(f"[telegram] Error al enviar: {e}")
+        return False
 
 
 def _icon(symbol: str) -> str:

@@ -46,9 +46,9 @@
 
 import sqlite3
 import json
+import html
 import math
 import logging
-import time
 import random
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass, asdict, field
@@ -60,6 +60,28 @@ import config as cfg
 
 log     = logging.getLogger(__name__)
 DB_PATH = Path("memory/zar_memory.db")
+
+
+def _normalize_message_text(text: str) -> str:
+    return html.unescape((text or "")).replace("&amp;", "&")
+
+
+def get_adaptive_trail_params(sym_cfg: dict, direction: str) -> dict:
+    """Retorna solo los parámetros vigentes del trailing adaptativo."""
+    base_be_atr_mult = float(sym_cfg.get("be_atr_mult", getattr(cfg, "BREAKEVEN_ATR_MULT", 2.0)))
+    buy_buffer_mult = float(sym_cfg.get("be_buffer_mult_buy", sym_cfg.get("be_buffer_mult", 0.50)))
+    sell_buffer_mult = float(sym_cfg.get("be_buffer_mult_sell", 0.35))
+
+    if direction == "SELL":
+        return {
+            "be_atr_mult": round(base_be_atr_mult * 0.9, 4),
+            "be_buffer_mult": sell_buffer_mult,
+        }
+
+    return {
+        "be_atr_mult": base_be_atr_mult,
+        "be_buffer_mult": buy_buffer_mult,
+    }
 
 # ── Umbrales de activación del ensemble ─────────────────────────
 COSINE_ONLY_THRESHOLD = 20   # < 20 trades: solo coseno + régimen
@@ -1502,6 +1524,8 @@ def check_memory(
     ensemble_detail = " | ".join(detail_parts)
 
     warning_msg = " | ".join(cosine_warnings) if cosine_warnings else ensemble_detail
+    warning_msg = _normalize_message_text(warning_msg)
+    ensemble_detail = _normalize_message_text(ensemble_detail)
 
     log.debug(
         f"[brain] {symbol} {direction}: "
@@ -1524,29 +1548,35 @@ def check_memory(
 #  ESTADÍSTICAS Y REPORTES
 # ════════════════════════════════════════════════════════════════
 
-def get_memory_stats() -> dict:
+def get_memory_stats(symbol: Optional[str] = None) -> dict:
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     try:
-        total  = cur.execute("SELECT COUNT(*) FROM trades").fetchone()[0]
-        wins   = cur.execute("SELECT COUNT(*) FROM trades WHERE result='WIN'").fetchone()[0]
-        losses = cur.execute("SELECT COUNT(*) FROM trades WHERE result='LOSS'").fetchone()[0]
-        be     = cur.execute("SELECT COUNT(*) FROM trades WHERE result='BE'").fetchone()[0]
-        profit = cur.execute("SELECT COALESCE(SUM(profit),0) FROM trades").fetchone()[0]
-        avg_rw = cur.execute("SELECT COALESCE(AVG(reward),0) FROM trades WHERE reward IS NOT NULL").fetchone()[0]
+        base_where = " WHERE symbol=?" if symbol else ""
+        args = (symbol,) if symbol else ()
+        total  = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}", args).fetchone()[0]
+        wins   = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='WIN'", args).fetchone()[0]
+        losses = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='LOSS'", args).fetchone()[0]
+        be     = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='BE'", args).fetchone()[0]
+        profit = cur.execute(f"SELECT COALESCE(SUM(profit),0) FROM trades{base_where}", args).fetchone()[0]
+        avg_rw = cur.execute(
+            f"SELECT COALESCE(AVG(reward),0) FROM trades{base_where}{' AND' if symbol else ' WHERE'} reward IS NOT NULL",
+            args,
+        ).fetchone()[0]
         # FIX: WR = wins/(wins+losses) — BE excluido del denominador
         # Antes: wins/total → con 38 total y 1 win daba 2.6% (falso)
         # Ahora: wins/(wins+losses) → 1/1 = 100% (correcto)
         decidable = wins + losses
         wr = (wins / decidable * 100) if decidable > 0 else 0
         return {
+            "symbol": symbol or "ALL",
             "total": total, "wins": wins, "losses": losses, "be": be,
             "profit": round(float(profit), 2),
             "win_rate": round(wr, 1),
             "avg_reward": round(float(avg_rw), 3),
         }
     except Exception:
-        return {"total": 0, "wins": 0, "losses": 0, "be": 0,
+        return {"symbol": symbol or "ALL", "total": 0, "wins": 0, "losses": 0, "be": 0,
                 "profit": 0.0, "win_rate": 0.0, "avg_reward": 0.0}
     finally:
         con.close()
@@ -1577,7 +1607,7 @@ def get_learning_report() -> str:
 
     models_str = " | ".join(model_states) if model_states else "Sin modelos activos"
     be_count = stats.get("be", 0)
-    return (
+    return _normalize_message_text(
         f"🧠 Memoria v2: {stats['total']} trades | "
         f"✅ {stats['wins']}W ❌ {stats['losses']}L ⚡ {be_count}BE | "
         f"WR: {stats['win_rate']}% (excl. BE) | P&L: ${stats['profit']:+.2f} | "
