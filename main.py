@@ -26,12 +26,14 @@ from typing import Optional
 try:
     import pandas as pd
 except ImportError:
-    print("❌  pip install pandas"); sys.exit(1)
+    print("❌ Error: pandas es requerido y no está instalado. Ejecuta: pip install pandas")
+    sys.exit(1)
 
 try:
     import requests
 except ImportError:
-    print("❌  pip install requests"); sys.exit(1)
+    print("❌ Error: requests es requerido y no está instalado. Ejecuta: pip install requests")
+    sys.exit(1)
 
 try:
     import MetaTrader5 as mt5
