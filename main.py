@@ -1,14 +1,17 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — main.py  (v6.5 — TRAILING STOP + WR FIX)     ║
+║   ZAR ULTIMATE BOT v6 — main.py  (v6.9 — TRAILING STOP PROPORCIONAL)  ║
 ║                                                                          ║
-║   FIXES v6.5 (sobre v6.4):                                             ║
-║   ✅ FIX 11 — Trailing stop progresivo (no BE inmediato)               ║
-║       • Etapa 1 (0–1.5×ATR):   SL intacto — dejar respirar             ║
-║       • Etapa 2 (1.5–2.5×ATR): SL→breakeven + buffer 0.1×ATR          ║
-║       • Etapa 3 (2.5–4×ATR):   SL trail a 1.5×ATR del precio actual   ║
-║       • Etapa 4 (>4×ATR):      SL trail a 1.0×ATR del precio actual   ║
-║       • Etapa 5 (>80% hacia TP): SL trail a 0.5×ATR (máxima captura)  ║
+║   FIXES v6.9 (sobre v6.5):                                             ║
+║   ✅ FIX 15 — Trailing stop proporcional basado en tp_progress          ║
+║       • < 30% TP:   BE puro + buffer mínimo (be_buffer_mult×ATR)       ║
+║       • >= 30% TP:  Protege 15% de la ganancia en precio               ║
+║       • >= 50% TP:  Protege 35% de la ganancia en precio               ║
+║       • >= 70% TP:  Protege 50% de la ganancia en precio               ║
+║       • >= 85% TP:  Protege 70% de la ganancia en precio               ║
+║   ✅ Anti-SL-Hunting: Trailing solo se activa tras 2 velas en profit   ║
+║   ✅ Ratchet: SL nunca retrocede, mínimo 0.5 pts de movimiento         ║
+║   ✅ Asimetría BUY/SELL: SELL usa be_atr_mult×0.9 y buffer 0.35×ATR   ║
 ║   ✅ FIX 12 — WR = wins/(wins+losses) — BE excluido del cálculo        ║
 ║   ✅ FIX 13 — BE no cuenta como trade en WR ni en EOD                  ║
 ║   ✅ FIX 14 — Filtro anti-contra-tendencia: bloquear cuando 4+         ║
@@ -586,40 +589,32 @@ def _calc_pips_instrument(deal, symbol: str) -> float:
 
 
 # ════════════════════════════════════════════════════════════════
-#  FIX 11 — TRAILING STOP PROGRESIVO (reemplaza _check_breakeven)
+#  FIX 15 — TRAILING STOP PROPORCIONAL (v6.9)
 # ════════════════════════════════════════════════════════════════
 
-# Estado del trailing por ticket: qué etapa alcanzó
-_trail_stage: dict = {}  # ticket → int (0=sin activar, 1=BE, 2=trail1.5, 3=trail1.0, 4=tight)
+# Contador de velas consecutivas en profit por ticket (anti-SL-hunting)
+_profit_candle_count: dict = {}  # ticket → int
 
 
 def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     """
-    FIX 11 — Trailing stop progresivo en 5 etapas:
+    FIX 15 — Trailing stop proporcional basado en tp_progress (v6.9):
 
-    ETAPA 0 (0 – 1.5×ATR mov favorable):
-        NO tocar el SL. Dejar que el precio respire.
-        El error anterior era activar BE demasiado pronto (1.0×ATR),
-        lo que causaba que el ruido normal cerrara el 97% de trades en BE.
+    Protección porcentual de la ganancia acumulada según progreso hacia TP:
+        < 30%:  BE puro + buffer mínimo (be_buffer_mult × ATR)
+        >= 30%: Bloquea el 15% de la ganancia en precio
+        >= 50%: Bloquea el 35% de la ganancia en precio
+        >= 70%: Bloquea el 50% de la ganancia en precio
+        >= 85%: Bloquea el 70% de la ganancia en precio
 
-    ETAPA 1 (1.5 – 2.5×ATR mov favorable):
-        Mover SL a breakeven + buffer de 0.1×ATR.
-        El capital queda protegido pero con margen para respirar.
+    Asimetría BUY/SELL: Las posiciones SELL usan be_atr_mult × 0.9
+    y be_buffer_mult × 0.35 (vs 0.5 para BUY) — exposición al alza ilimitada.
 
-    ETAPA 2 (2.5 – 4×ATR mov favorable):
-        Trail dinámico: SL se mueve a 1.5×ATR del precio actual.
-        Nunca retrocede. Lockea ~1×ATR de ganancia.
+    Anti-SL-Hunting: Trailing SOLO se activa si el ticket lleva >= 2 ciclos
+    consecutivos en profit (_profit_candle_count).
 
-    ETAPA 3 (>4×ATR mov favorable):
-        Trail más ajustado: SL a 1.0×ATR del precio actual.
-        Lockea ~3×ATR de ganancia.
-
-    ETAPA 4 (>80% del camino hacia TP):
-        Trail muy ajustado: SL a 0.5×ATR del precio actual.
-        Maximiza captura cuando estamos cerca del TP.
-
-    NUNCA retrocede el SL (solo se mueve en dirección favorable).
-    NUNCA mueve el SL por debajo del precio de apertura (siempre en ganancia).
+    Ratchet: El SL NUNCA retrocede. Mínimo 0.5 puntos de movimiento antes
+    de enviar modificación a MT5 (evitar spam al broker).
     """
     global last_action, symbol_status_cache
 
@@ -645,130 +640,112 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
 
     atr_pts = atr_val / point
 
-    # ── Calcular movimiento favorable en puntos ──
+    # ── Calcular movimiento favorable en precio ──
     if direction == "BUY":
-        move_pts   = (cur_p - open_p) / point
-        tp_total   = (tp - open_p) / point  if tp > open_p else 0
-        tp_remaining = (tp - cur_p) / point if tp > cur_p  else 0
+        profit_price = cur_p - open_p
+        tp_total     = (tp - open_p) if tp > open_p else 0.0
+        tp_remaining = (tp - cur_p)  if tp > cur_p  else 0.0
     else:
-        move_pts   = (open_p - cur_p) / point
-        tp_total   = (open_p - tp) / point  if tp < open_p else 0
-        tp_remaining = (cur_p - tp) / point if tp < cur_p  else 0
+        profit_price = open_p - cur_p
+        tp_total     = (open_p - tp) if tp < open_p else 0.0
+        tp_remaining = (cur_p - tp)  if tp < cur_p  else 0.0
+
+    # ── Anti-SL-Hunting: actualizar contador de velas en profit ──
+    if profit_price > 0:
+        _profit_candle_count[ticket] = _profit_candle_count.get(ticket, 0) + 1
+    else:
+        _profit_candle_count[ticket] = 0
 
     # Si el precio está en pérdida o exactamente en entrada → no hacer nada
-    if move_pts <= 0:
+    if profit_price <= 0:
+        return
+
+    # Regla Anti-SL-Hunting: SOLO actuar si >= 2 velas consecutivas en profit
+    if _profit_candle_count.get(ticket, 0) < 2:
         return
 
     # Calcular progreso hacia TP (0.0 = entrada, 1.0 = TP)
-    tp_progress = 1.0 - (tp_remaining / max(tp_total, 1))
+    tp_progress = 1.0 - (tp_remaining / max(tp_total, point))
     tp_progress = max(0.0, min(1.0, tp_progress))
 
-    # ── be_atr_mult del símbolo: cuánto necesita moverse para activar BE ──
-    # FIX: ahora el mínimo es 1.5 (no 1.0). Configurado en config.py por símbolo.
-    be_atr_mult = sym_cfg.get("be_atr_mult", getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5))
-    be_threshold_pts = be_atr_mult * atr_pts
+    # ── Parámetros de BE con asimetría BUY/SELL ──
+    be_atr_mult   = sym_cfg.get("be_atr_mult", getattr(cfg, "BREAKEVEN_ATR_MULT", 1.5))
+    be_buffer_mult = sym_cfg.get("be_buffer_mult", 0.5)
 
-    current_stage = _trail_stage.get(ticket, 0)
+    if direction == "SELL":
+        # Exposición al alza ilimitada → BE más ajustado
+        be_atr_mult    = be_atr_mult * 0.9
+        be_buffer_mult = 0.35
+
+    be_threshold = be_atr_mult * atr_pts * point
 
     # ── ETAPA 0: Demasiado pronto — no tocar ──
-    if move_pts < be_threshold_pts:
+    if profit_price < be_threshold:
         return
 
-    # ── Determinar nueva etapa y trail distance ──
-    new_sl = None
-    new_stage = current_stage
-
-    if tp_progress >= 0.80:
-        # ETAPA 4: Cerca del TP — trail muy ajustado (0.5×ATR)
-        trail_pts = 0.5 * atr_pts
-        new_stage = 4
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 4.0 * atr_pts:
-        # ETAPA 3: >4×ATR de ganancia — trail 1.0×ATR
-        trail_pts = 1.0 * atr_pts
-        new_stage = 3
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
-    elif move_pts >= 2.5 * atr_pts:
-        # ETAPA 2: >2.5×ATR — trail 1.5×ATR
-        trail_pts = 1.5 * atr_pts
-        new_stage = 2
-        if direction == "BUY":
-            new_sl = cur_p - trail_pts * point
-        else:
-            new_sl = cur_p + trail_pts * point
-
+    # ── Determinar lock_pct según progreso hacia TP ──
+    if tp_progress >= 0.85:
+        lock_pct = 0.70
+    elif tp_progress >= 0.70:
+        lock_pct = 0.50
+    elif tp_progress >= 0.50:
+        lock_pct = 0.35
+    elif tp_progress >= 0.30:
+        lock_pct = 0.15
     else:
-        # ETAPA 1: Activar breakeven (abierto tras 1.5×ATR)
-        # Mover SL a precio de apertura + pequeño buffer (0.1×ATR)
-        buffer_pts = max(1.0, atr_pts * 0.10)
-        new_stage  = 1
-        if direction == "BUY":
-            new_sl = open_p + buffer_pts * point
-        else:
-            new_sl = open_p - buffer_pts * point
+        # BE puro: bloquea solo el buffer mínimo
+        lock_pct = None
 
-    if new_sl is None:
-        return
+    # ── Calcular nuevo SL ──
+    if lock_pct is not None:
+        locked_profit = profit_price * lock_pct
+        if direction == "BUY":
+            new_sl = open_p + locked_profit
+        else:
+            new_sl = open_p - locked_profit
+        stage_label = f"Trail {lock_pct:.0%} ganancia (TP={tp_progress:.0%})"
+    else:
+        # BE puro con buffer
+        buffer = be_buffer_mult * atr_pts * point
+        if direction == "BUY":
+            new_sl = open_p + buffer
+        else:
+            new_sl = open_p - buffer
+        stage_label = "BE activado"
 
     new_sl = round(new_sl, 5)
 
-    # ── Regla crítica: NUNCA retroceder el SL ──
+    # ── Regla Ratchet: NUNCA retroceder el SL ──
     if direction == "BUY":
         if new_sl <= sl:
             return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por debajo de la apertura en etapas >= 2
-        if new_stage >= 2:
-            min_sl = open_p + (atr_pts * 0.05) * point
-            new_sl = max(new_sl, min_sl)
     else:
         if new_sl >= sl:
             return  # Nuevo SL está peor o igual → no mover
-        # Nunca mover por encima de la apertura en etapas >= 2
-        if new_stage >= 2:
-            max_sl = open_p - (atr_pts * 0.05) * point
-            new_sl = min(new_sl, max_sl)
 
-    # ── Verificar que sigue siendo diferente al SL actual ──
+    # ── Mínimo de movimiento: 0.5 puntos (evitar spam al broker) ──
     diff_pts = abs(new_sl - sl) / point
     if diff_pts < 0.5:
-        return  # Diferencia mínima insignificante
+        return
 
     # ── Mover SL ──
+    first_be = (sl == 0 or (direction == "BUY" and sl < open_p) or
+                (direction == "SELL" and sl > open_p))
     if move_sl(ticket, new_sl):
-        prev_stage = _trail_stage.get(ticket, 0)
-        _trail_stage[ticket] = new_stage
+        locked_pts = profit_price * (lock_pct if lock_pct is not None else 0.0) / point
 
-        profit_pips = move_pts
-        stage_names = {
-            1: "BE activado",
-            2: "Trail 1.5×ATR",
-            3: "Trail 1.0×ATR",
-            4: "Trail 0.5×ATR (TP cercano)",
-        }
-        stage_label = stage_names.get(new_stage, f"Etapa {new_stage}")
-        locked_pts  = (new_sl - open_p) / point if direction == "BUY" else (open_p - new_sl) / point
-
-        if new_stage == 1 and prev_stage < 1:
-            # Primera vez que se activa BE — notificar
-            notify_breakeven(symbol, ticket, new_sl, profit_pips)
+        if first_be and lock_pct is None:
+            notify_breakeven(symbol, ticket, new_sl,
+                             profit_price / point)
             log.info(
                 f"[Trail] 🛡 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | SL→{new_sl:.5f}"
+                f"— {stage_label} | SL→{new_sl:.5f}"
             )
         else:
-            # Trailing update — log sin notificación Telegram
             log.info(
                 f"[Trail] 📈 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | mov={move_pts:.0f}pts | "
-                f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
+                f"— {stage_label} | lock={locked_pts:.0f}pts "
+                f"| SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
             )
 
         last_action = f"Trail {stage_label} #{ticket} {symbol} lock={locked_pts:.0f}pts"
