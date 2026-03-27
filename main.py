@@ -34,9 +34,9 @@ except ImportError:
     print("❌  pip install MetaTrader5"); sys.exit(1)
 
 try:
-    from google import genai
+    from groq import Groq
 except ImportError:
-    print("❌  pip install google-genai"); sys.exit(1)
+    print("❌  pip install groq"); sys.exit(1)
 
 import config as cfg
 from modules.indicators        import compute_all
@@ -79,8 +79,8 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Gemini ───────────────────────────────────────────────────────
-gemini_client = genai.Client(api_key=cfg.GEMINI_API_KEY)
+# ── Groq ────────────────────────────────────────────────────────
+groq_client = Groq(api_key=cfg.GROQ_API_KEY)
 
 # ── TF Map MT5 ───────────────────────────────────────────────────
 TF_MAP = {
@@ -129,12 +129,12 @@ daily_trades_log: list = []
 trade_mode_cache: dict = {}
 _profit_candle_count: dict = {}
 _profit_candle_last_seen: dict = {}
-last_gemini_analysis: dict = {}
+last_groq_analysis: dict = {}
 web_status_snapshot: dict = {}
 state_lock = threading.RLock()
-gemini_cooldown_until: float = 0.0
-gemini_call_cache: dict = {}
-gemini_usage_stats: dict = {
+groq_cooldown_until: float = 0.0
+groq_call_cache: dict = {}
+groq_usage_stats: dict = {
     "api_calls_total": 0,
     "api_success_total": 0,
     "cache_hits_total": 0,
@@ -145,8 +145,8 @@ gemini_usage_stats: dict = {
     "fallback_holds_total": 0,
     "errors_total": 0,
 }
-gemini_hourly_usage: dict = {}
-gemini_daily_usage: dict = {}
+groq_hourly_usage: dict = {}
+groq_daily_usage: dict = {}
 shared_news_cache = None
 shared_news_last_update: float = 0.0
 
@@ -156,12 +156,12 @@ def _set_symbol_status(symbol: str, status: str):
     symbol_status_cache[symbol] = status
 
 
-def _set_last_gemini_analysis(symbol: str, analysis: Optional[dict]):
-    global last_gemini_analysis
+def _set_last_groq_analysis(symbol: str, analysis: Optional[dict]):
+    global last_groq_analysis
     if not analysis:
         return
     with state_lock:
-        last_gemini_analysis = {
+        last_groq_analysis = {
             "symbol": symbol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision": analysis.get("decision", "HOLD"),
@@ -172,59 +172,59 @@ def _set_last_gemini_analysis(symbol: str, analysis: Optional[dict]):
         }
 
 
-def _bump_gemini_metric(metric: str):
+def _bump_groq_metric(metric: str):
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     with state_lock:
-        gemini_usage_stats[metric] = int(gemini_usage_stats.get(metric, 0)) + 1
+        groq_usage_stats[metric] = int(groq_usage_stats.get(metric, 0)) + 1
         if metric == "api_calls_total":
-            gemini_hourly_usage[hour_key] = int(gemini_hourly_usage.get(hour_key, 0)) + 1
-            gemini_daily_usage[day_key] = int(gemini_daily_usage.get(day_key, 0)) + 1
+            groq_hourly_usage[hour_key] = int(groq_hourly_usage.get(hour_key, 0)) + 1
+            groq_daily_usage[day_key] = int(groq_daily_usage.get(day_key, 0)) + 1
 
-            while len(gemini_hourly_usage) > 72:
-                oldest = sorted(gemini_hourly_usage.keys())[0]
-                gemini_hourly_usage.pop(oldest, None)
-            while len(gemini_daily_usage) > 14:
-                oldest = sorted(gemini_daily_usage.keys())[0]
-                gemini_daily_usage.pop(oldest, None)
+            while len(groq_hourly_usage) > 72:
+                oldest = sorted(groq_hourly_usage.keys())[0]
+                groq_hourly_usage.pop(oldest, None)
+            while len(groq_daily_usage) > 14:
+                oldest = sorted(groq_daily_usage.keys())[0]
+                groq_daily_usage.pop(oldest, None)
 
 
-def _get_gemini_metrics_snapshot() -> dict:
+def _get_groq_metrics_snapshot() -> dict:
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     with state_lock:
         return {
-            **gemini_usage_stats,
-            "api_calls_current_hour": int(gemini_hourly_usage.get(hour_key, 0)),
-            "api_calls_current_day": int(gemini_daily_usage.get(day_key, 0)),
-            "cooldown_until": datetime.fromtimestamp(gemini_cooldown_until, tz=timezone.utc).isoformat() if gemini_cooldown_until > time.time() else "",
+            **groq_usage_stats,
+            "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
+            "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
+            "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
         }
 
 
-def _get_gemini_metrics_snapshot_unlocked() -> dict:
+def _get_groq_metrics_snapshot_unlocked() -> dict:
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     return {
-        **gemini_usage_stats,
-        "api_calls_current_hour": int(gemini_hourly_usage.get(hour_key, 0)),
-        "api_calls_current_day": int(gemini_daily_usage.get(day_key, 0)),
-        "cooldown_until": datetime.fromtimestamp(gemini_cooldown_until, tz=timezone.utc).isoformat() if gemini_cooldown_until > time.time() else "",
+        **groq_usage_stats,
+        "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
+        "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
+        "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
     }
 
 
-def _build_gemini_fallback_decision(reason: str) -> dict:
-    _bump_gemini_metric("fallback_holds_total")
+def _build_groq_fallback_decision(reason: str) -> dict:
+    _bump_groq_metric("fallback_holds_total")
     fallback = {
         "decision": "HOLD",
         "confidence": 0,
         "reason": reason,
-        "key_signals": ["fallback_system", "gemini_unavailable"],
-        "main_risk": "Gemini no disponible para validar noticias y sentimiento",
+        "key_signals": ["fallback_system", "groq_unavailable"],
+        "main_risk": "Groq no disponible para validar noticias y sentimiento",
     }
-    _set_last_gemini_analysis("SYSTEM", fallback)
+    _set_last_groq_analysis("SYSTEM", fallback)
     return fallback
 
 
@@ -267,8 +267,8 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "memory": get_memory_stats(),
             "news": news_payload,
             "shared_news_fetched_at": getattr(shared_news_cache, "fetched_at", "") if shared_news_cache is not None else "",
-            "gemini_metrics": _get_gemini_metrics_snapshot_unlocked(),
-            "last_gemini_analysis": dict(last_gemini_analysis),
+            "groq_metrics": _get_groq_metrics_snapshot_unlocked(),
+            "last_groq_analysis": dict(last_groq_analysis),
         }
 
 
@@ -296,7 +296,7 @@ def _extract_retry_delay_seconds(err_str: str) -> float:
         return 60.0
 
 
-def _build_gemini_cache_key(symbol: str, direction_hint: str, candle_stamp: str, ind: dict) -> str:
+def _build_groq_cache_key(symbol: str, direction_hint: str, candle_stamp: str, ind: dict) -> str:
     conf_total = round(float(ind.get("confluence", {}).get("total", 0.0) or 0.0), 2)
     h1_trend = ind.get("h1_trend", "LATERAL")
     hilbert_signal = ind.get("hilbert", {}).get("signal", "NEUTRAL")
@@ -394,7 +394,7 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
     return True, ""
 
 
-def _is_gemini_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
+def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
     plan = _compute_trade_plan(symbol, action, ind, sym_cfg)
     if plan is None:
         return False, "⚠️ Tick no disponible", None
@@ -425,7 +425,7 @@ def _is_gemini_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_
         cycle_ok = hilbert_signal != "LOCAL_MIN"
         trend_ok = ("BAJISTA" in trend) or vote_edge >= 2
 
-    # ── HARD GATE: Sin confluencia suficiente NO se consulta Gemini ──
+    # ── HARD GATE: Sin confluencia suficiente NO se consulta Groq ──
     if not conf_ok:
         return False, (
             f"🔒 Confluencia insuficiente {action}: "
@@ -496,7 +496,7 @@ def get_open_positions_count_realtime() -> int:
 
 
 # ════════════════════════════════════════════════════════════════
-#  GEMINI — CON RETRY EXPONENCIAL
+#  GROQ — CON RETRY EXPONENCIAL
 # ════════════════════════════════════════════════════════════════
 
 SYSTEM_PROMPT_BASE = """
@@ -630,44 +630,44 @@ def get_system_prompt(sym_cfg: dict) -> str:
     )
 
 
-def ask_gemini(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
     system_prompt = get_system_prompt(sym_cfg)
-    global gemini_cooldown_until, gemini_call_cache
+    global groq_cooldown_until, groq_call_cache
 
     now_ts = time.time()
-    if cache_key and cache_key in gemini_call_cache:
-        _bump_gemini_metric("cache_hits_total")
-        return gemini_call_cache[cache_key]
+    if cache_key and cache_key in groq_call_cache:
+        _bump_groq_metric("cache_hits_total")
+        return groq_call_cache[cache_key]
 
-    if now_ts < gemini_cooldown_until:
-        wait_left = int(max(1, gemini_cooldown_until - now_ts))
-        log.warning(f"[gemini] Cooldown global activo — omitiendo consulta {symbol} ({wait_left}s restantes)")
-        _bump_gemini_metric("cooldown_skips_total")
-        fallback = _build_gemini_fallback_decision(f"Cooldown Gemini activo ({wait_left}s restantes)")
+    if now_ts < groq_cooldown_until:
+        wait_left = int(max(1, groq_cooldown_until - now_ts))
+        log.warning(f"[groq] Cooldown global activo — omitiendo consulta {symbol} ({wait_left}s restantes)")
+        _bump_groq_metric("cooldown_skips_total")
+        fallback = _build_groq_fallback_decision(f"Cooldown Groq activo ({wait_left}s restantes)")
         if cache_key:
-            gemini_call_cache[cache_key] = fallback
+            groq_call_cache[cache_key] = fallback
         return fallback
 
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
-    max_calls_hour = int(getattr(cfg, "GEMINI_MAX_CALLS_PER_HOUR", 0) or 0)
-    max_calls_day = int(getattr(cfg, "GEMINI_MAX_CALLS_PER_DAY", 0) or 0)
-    current_hour_calls = int(gemini_hourly_usage.get(hour_key, 0))
-    current_day_calls = int(gemini_daily_usage.get(day_key, 0))
+    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
+    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
+    current_hour_calls = int(groq_hourly_usage.get(hour_key, 0))
+    current_day_calls = int(groq_daily_usage.get(day_key, 0))
 
     if (max_calls_hour > 0 and current_hour_calls >= max_calls_hour) or (
         max_calls_day > 0 and current_day_calls >= max_calls_day
     ):
         limit_reason = (
-            f"Presupuesto Gemini alcanzado (hora {current_hour_calls}/{max_calls_hour}, "
+            f"Presupuesto Groq alcanzado (hora {current_hour_calls}/{max_calls_hour}, "
             f"día {current_day_calls}/{max_calls_day})"
         )
-        log.warning(f"[gemini] {limit_reason} — omitiendo consulta {symbol}")
-        _bump_gemini_metric("skipped_by_budget_total")
-        fallback = _build_gemini_fallback_decision(limit_reason)
+        log.warning(f"[groq] {limit_reason} — omitiendo consulta {symbol}")
+        _bump_groq_metric("skipped_by_budget_total")
+        fallback = _build_groq_fallback_decision(limit_reason)
         if cache_key:
-            gemini_call_cache[cache_key] = fallback
+            groq_call_cache[cache_key] = fallback
         return fallback
 
     max_attempts = 2
@@ -675,70 +675,73 @@ def ask_gemini(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") ->
 
     for attempt in range(max_attempts):
         if wait_secs[attempt] > 0:
-            log.info(f"[gemini] Reintentando en {wait_secs[attempt]}s (intento {attempt+1}/{max_attempts})...")
+            log.info(f"[groq] Reintentando en {wait_secs[attempt]}s (intento {attempt+1}/{max_attempts})...")
             time.sleep(wait_secs[attempt])
         try:
-            _bump_gemini_metric("api_calls_total")
-            response = gemini_client.models.generate_content(
-                model="gemini-2.5-flash",
-                contents=[
-                    {"role": "user",  "parts": [{"text": system_prompt}]},
-                    {"role": "model", "parts": [{"text": "Entendido. Analizaré y responderé en JSON exacto."}]},
-                    {"role": "user",  "parts": [{"text": context}]},
+            _bump_groq_metric("api_calls_total")
+            response = groq_client.chat.completions.create(
+                model=cfg.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user",   "content": context},
                 ],
+                temperature=0.2,   # bajo para decisiones deterministas de trading
+                max_tokens=512,    # suficiente para el JSON de respuesta (~150 palabras)
+                response_format={"type": "json_object"},  # fuerza JSON válido; fallback de parseo por compatibilidad
             )
-            raw = response.text.strip()
+            raw = response.choices[0].message.content.strip()
             if "```json" in raw:
                 raw = raw.split("```json")[1].split("```")[0].strip()
             elif "```" in raw:
                 raw = raw.split("```")[1].strip()
             payload = json.loads(raw)
-            _set_last_gemini_analysis(symbol, payload)
-            _bump_gemini_metric("api_success_total")
+            _set_last_groq_analysis(symbol, payload)
+            _bump_groq_metric("api_success_total")
             if cache_key:
-                gemini_call_cache[cache_key] = payload
+                groq_call_cache[cache_key] = payload
             return payload
 
         except json.JSONDecodeError as e:
-            log.error(f"[gemini] JSON inválido (intento {attempt+1}): {e}")
-            _bump_gemini_metric("errors_total")
-            fallback = _build_gemini_fallback_decision("Gemini devolvió JSON inválido")
+            log.error(f"[groq] JSON inválido (intento {attempt+1}): {e}")
+            _bump_groq_metric("errors_total")
+            fallback = _build_groq_fallback_decision("Groq devolvió JSON inválido")
             if cache_key:
-                gemini_call_cache[cache_key] = fallback
+                groq_call_cache[cache_key] = fallback
             return fallback
 
         except Exception as e:
             err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            status_code = getattr(e, "status_code", None)
+            if status_code == 429 or "429" in err_str or "rate_limit" in err_str.lower():
                 retry_after = _extract_retry_delay_seconds(err_str)
-                gemini_cooldown_until = time.time() + retry_after + 1.0
-                log.error(f"[gemini] Cuota agotada — cooldown global {retry_after:.0f}s")
-                _bump_gemini_metric("quota_hits_total")
-                fallback = _build_gemini_fallback_decision(
-                    f"Cuota Gemini agotada, reintentar tras {retry_after:.0f}s"
+                groq_cooldown_until = time.time() + retry_after + 1.0
+                log.error(f"[groq] Cuota agotada — cooldown global {retry_after:.0f}s")
+                _bump_groq_metric("quota_hits_total")
+                fallback = _build_groq_fallback_decision(
+                    f"Cuota Groq agotada, reintentar tras {retry_after:.0f}s"
                 )
                 if cache_key:
-                    gemini_call_cache[cache_key] = fallback
+                    groq_call_cache[cache_key] = fallback
                 return fallback
             if "503" in err_str or "UNAVAILABLE" in err_str:
                 if attempt < max_attempts - 1:
-                    log.warning(f"[gemini] 503 UNAVAILABLE — reintentando...")
+                    log.warning(f"[groq] 503 UNAVAILABLE — reintentando...")
                     continue
             elif "404" in err_str or "NOT_FOUND" in err_str:
-                log.error(f"[gemini] Modelo no disponible: {e}")
-                _bump_gemini_metric("errors_total")
-                fallback = _build_gemini_fallback_decision("Modelo Gemini no disponible")
+                log.error(f"[groq] Modelo no disponible: {e}")
+                _bump_groq_metric("errors_total")
+                fallback = _build_groq_fallback_decision("Modelo Groq no disponible")
                 if cache_key:
-                    gemini_call_cache[cache_key] = fallback
+                    groq_call_cache[cache_key] = fallback
                 return fallback
-            log.error(f"[gemini] Error (intento {attempt+1}): {e}")
+            log.error(f"[groq] Error (intento {attempt+1}): {e}")
             if attempt == max_attempts - 1:
-                _bump_gemini_metric("errors_total")
-                fallback = _build_gemini_fallback_decision("Error transitorio de Gemini")
+                _bump_groq_metric("errors_total")
+                fallback = _build_groq_fallback_decision("Error transitorio de Groq")
                 if cache_key:
-                    gemini_call_cache[cache_key] = fallback
+                    groq_call_cache[cache_key] = fallback
                 return fallback
-    return _build_gemini_fallback_decision("Gemini sin respuesta")
+    return _build_groq_fallback_decision("Groq sin respuesta")
 
 
 def build_context(
@@ -940,7 +943,7 @@ def build_lateral_context(
         mem_check = payload["mem_check"]
         plan = payload["trade_plan"]
         lines += [
-            f"[{action}] listo_para_gemini={payload['candidate_ok']}",
+            f"[{action}] listo_para_groq={payload['candidate_ok']}",
             f"  gate: {payload['candidate_reason'] or 'OK'}",
             f"  memory: block={mem_check.should_block} adj={mem_check.confidence_adj:+.1f} detail={mem_check.warning_msg}",
             f"  scorecard: block={scorecard.should_block} wr={scorecard.win_rate:.1f}% n={scorecard.sample_size} reason={scorecard.reason}",
@@ -1727,7 +1730,7 @@ def _process_symbol(
         candidate_payloads = {}
         ready_actions = []
         for action, features, mem_check, scorecard, policy in viable:
-            candidate_ok, candidate_reason, trade_plan = _is_gemini_candidate_ready(
+            candidate_ok, candidate_reason, trade_plan = _is_groq_candidate_ready(
                 symbol, action, ind, sr_ctx, sym_cfg
             )
             candidate_payloads[action] = {
@@ -1743,7 +1746,7 @@ def _process_symbol(
                 ready_actions.append(action)
 
         if not ready_actions:
-            _bump_gemini_metric("skipped_by_gate_total")
+            _bump_groq_metric("skipped_by_gate_total")
             reasons = " | ".join(
                 f"{action}:{payload['candidate_reason']}" for action, payload in candidate_payloads.items()
             )
@@ -1753,7 +1756,7 @@ def _process_symbol(
             return
 
         memory_block_notified.pop(symbol, None)
-        cache_key = _build_gemini_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
+        cache_key = _build_groq_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
         context = build_lateral_context(
             symbol=symbol,
             ind=ind,
@@ -1763,7 +1766,7 @@ def _process_symbol(
             cal_events=cal_events_nearby,
             candidate_payloads=candidate_payloads,
         )
-        decision = ask_gemini(symbol, context, sym_cfg, cache_key=cache_key)
+        decision = ask_groq(symbol, context, sym_cfg, cache_key=cache_key)
         base_payload = candidate_payloads[ready_actions[0]]
         _execute_decision(
             symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
@@ -1818,35 +1821,35 @@ def _process_symbol(
         log.info(f"[{symbol}] {msg} | {policy.reason}")
         return
 
-    # ── FASE 3: Confluence Gate pre-Gemini (directional path) ──────
+    # ── FASE 3: Confluence Gate pre-Groq (directional path) ──────
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
-    candidate_ok, candidate_reason, trade_plan = _is_gemini_candidate_ready(
+    candidate_ok, candidate_reason, trade_plan = _is_groq_candidate_ready(
         symbol, mem_direction, ind, sr_ctx, sym_cfg
     )
     if not candidate_ok:
-        _bump_gemini_metric("skipped_by_gate_total")
+        _bump_groq_metric("skipped_by_gate_total")
         _set_symbol_status(symbol, candidate_reason[:48])
         last_action = f"{candidate_reason} {symbol}"
-        log.info(f"[{symbol}] {candidate_reason} — Gemini no consultado")
+        log.info(f"[{symbol}] {candidate_reason} — Groq no consultado")
         return
 
-    cache_key = _build_gemini_cache_key(symbol, mem_direction, candle_stamp, ind)
+    cache_key = _build_groq_cache_key(symbol, mem_direction, candle_stamp, ind)
     context  = build_context(
         symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
         cal_events_nearby, scorecard, policy, trade_plan,
     )
-    decision = ask_gemini(symbol, context, sym_cfg, cache_key=cache_key)
+    decision = ask_groq(symbol, context, sym_cfg, cache_key=cache_key)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
 
 
 def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
     """
-    FASE 3 — Confluence Hard Gate (pre-Gemini).
+    FASE 3 — Confluence Hard Gate (pre-Groq).
 
-    Bloquea la llamada a Gemini si la Confluencia de 3 Pilares contradice
+    Bloquea la llamada a Groq si la Confluencia de 3 Pilares contradice
     fuertemente la dirección esperada. Ahorra una llamada API y aplica el
     equivalente en código a REGLA 15 del system prompt.
 
@@ -1871,14 +1874,14 @@ def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
         msg = f"⚡ Conf veta BUY ({conf_total:+.2f}) — pilares bajistas"
         _set_symbol_status(symbol, msg[:48])
         last_action = f"{msg} {symbol}"
-        log.info(f"[{symbol}] {msg} — Gemini no consultado")
+        log.info(f"[{symbol}] {msg} — Groq no consultado")
         return True
 
     if direction == "SELL" and conf_total > hard_thresh:
         msg = f"⚡ Conf veta SELL ({conf_total:+.2f}) — pilares alcistas"
         _set_symbol_status(symbol, msg[:48])
         last_action = f"{msg} {symbol}"
-        log.info(f"[{symbol}] {msg} — Gemini no consultado")
+        log.info(f"[{symbol}] {msg} — Groq no consultado")
         return True
 
     return False
@@ -1889,12 +1892,12 @@ def _execute_decision(
     mem_check, features, balance, df_entry,
     candidate_payloads=None,
 ):
-    """Valida la decisión de Gemini y aplica filtro anti-contra-tendencia."""
+    """Valida la decisión de Groq y aplica filtro anti-contra-tendencia."""
     global last_action
 
     if decision is None:
-        log.warning(f"[{symbol}] Gemini no respondió")
-        _set_symbol_status(symbol, "🤖 Gemini no respondió")
+        log.warning(f"[{symbol}] Groq no respondió")
+        _set_symbol_status(symbol, "🤖 Groq no respondió")
         return
 
     action     = decision.get("decision", "HOLD")
@@ -1981,22 +1984,22 @@ def _execute_decision(
         _set_symbol_status(symbol, f"🚫 {filter_reason[:48]}")
         return
 
-    # ── FASE 3: Confluence Hard Gate (safety net post-Gemini) ─────
-    # Veta la orden si la respuesta de Gemini contradice la confluencia global.
-    # Captura el caso LATERAL donde la dirección no se conocía antes de Gemini.
+    # ── FASE 3: Confluence Hard Gate (safety net post-Groq) ─────
+    # Veta la orden si la respuesta de Groq contradice la confluencia global.
+    # Captura el caso LATERAL donde la dirección no se conocía antes de Groq.
     conf_total  = ind.get("confluence", {}).get("total", 0.0)
     conf_thresh = (
         getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)
         * getattr(cfg, "CONFLUENCE_HARD_GATE_MULT", 2)
     )
     if action == "BUY" and conf_total < -conf_thresh:
-        msg = f"⚡ Conf veta BUY post-Gemini ({conf_total:+.2f})"
+        msg = f"⚡ Conf veta BUY post-Groq ({conf_total:+.2f})"
         log.info(f"[{symbol}] {msg}")
         last_action = f"{msg} {symbol}"
         _set_symbol_status(symbol, msg[:48])
         return
     if action == "SELL" and conf_total > conf_thresh:
-        msg = f"⚡ Conf veta SELL post-Gemini ({conf_total:+.2f})"
+        msg = f"⚡ Conf veta SELL post-Groq ({conf_total:+.2f})"
         log.info(f"[{symbol}] {msg}")
         last_action = f"{msg} {symbol}"
         _set_symbol_status(symbol, msg[:48])

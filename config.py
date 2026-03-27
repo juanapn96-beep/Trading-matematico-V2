@@ -42,9 +42,12 @@ MT5_PASSWORD = _require_env("MT5_PASSWORD")
 MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
 
 # ================================================================
-#  GOOGLE GEMINI
+#  GROQ
 # ================================================================
-GEMINI_API_KEY = _require_env("GEMINI_API_KEY")
+GROQ_API_KEY   = _require_env("GROQ_API_KEY")
+GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
+GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
 
 # ================================================================
 #  TELEGRAM
@@ -587,7 +590,7 @@ MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
 CONFLUENCE_MIN_SCORE         = 0.25  # Score mínimo absoluto para permitir entrada
 # (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
 # Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
-# → el símbolo muestra "confluencia débil" pero aún se pregunta a Gemini.
+# → el símbolo muestra "confluencia débil" pero aún se pregunta a Groq.
 
 # ================================================================
 #  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING
@@ -602,7 +605,7 @@ KELLY_FRACTION    = 0.25   # 25% del Kelly óptimo (cuarto de Kelly = conservado
 KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para activar Kelly
                             # Con menos trades, el Kelly se basa en estadística insuficiente
 
-# Multiplicador del umbral duro de confluencia (pre-Gemini + post-Gemini gate).
+# Multiplicador del umbral duro de confluencia (pre-Groq + post-Groq gate).
 # Umbral efectivo = CONFLUENCE_MIN_SCORE × CONFLUENCE_HARD_GATE_MULT
 # Ejemplo con defaults: 0.3 × 2 = 0.6 sobre escala [-3, +3]
 # Aumentar → más permisivo (solo bloquea señales muy contradictorias)
@@ -667,9 +670,9 @@ WEB_DASHBOARD_HOST = "127.0.0.1"
 WEB_DASHBOARD_PORT = 8765
 
 # ================================================================
-#  PRESUPUESTO GEMINI (CONTROL DURO DE COSTO)
+#  PRESUPUESTO GROQ (CONTROL DURO DE COSTO)
 # ================================================================
+# Configurado vía variables de entorno GROQ_MAX_CALLS_PER_HOUR y
+# GROQ_MAX_CALLS_PER_DAY (ver sección GROQ al inicio de este archivo).
 # 0 = desactivado. Si se define >0, el bot no hará más llamadas una vez
 # alcanzado el límite y usará fallback HOLD para evitar gasto excedente.
-GEMINI_MAX_CALLS_PER_HOUR = 80
-GEMINI_MAX_CALLS_PER_DAY  = 600
