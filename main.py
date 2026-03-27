@@ -23,8 +23,15 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-import pandas as pd
-import requests
+try:
+    import pandas as pd
+except ImportError:
+    print("❌  pip install pandas"); sys.exit(1)
+
+try:
+    import requests
+except ImportError:
+    print("❌  pip install requests"); sys.exit(1)
 
 try:
     import MetaTrader5 as mt5
