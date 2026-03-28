@@ -46,3 +46,6 @@ ehthumbs.db
 
 # FASE 8 — Resultados de backtesting (generados en ejecución)
 backtest_results/
+
+# FASE 9 — Caché de volumen real de Dukascopy (CSVs históricos)
+volume_cache/

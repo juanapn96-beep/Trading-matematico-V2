@@ -1,15 +1,19 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — sentiment_data.py  (FASE 7)            ║
+║   ZAR ULTIMATE BOT v6 — sentiment_data.py  (FASE 7 + FASE 9)   ║
 ║                                                                  ║
 ║   Datos de sentimiento de mercado de fuentes gratuitas:         ║
 ║   • Crypto Fear & Greed Index  (BTCUSDm)                       ║
 ║   • CBOE VIX — volatilidad implícita  (US500m, NAS100m)        ║
+║   • CFTC COT Report — posicionamiento institucional             ║
+║     (forex, commodities, índices, crypto)                       ║
 ║                                                                  ║
 ║   Los datos se cachean con TTL para evitar exceder rate-limits. ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
+import csv
+import io
 import logging
 import time
 from typing import Optional
@@ -21,11 +25,12 @@ log = logging.getLogger(__name__)
 # ── Cache ────────────────────────────────────────────────────────
 _cache: dict = {}
 _cache_ts: dict = {}
-CACHE_TTL_SEC = 900  # 15 min
+CACHE_TTL_SEC     = 900    # 15 min  — Fear & Greed, VIX
+COT_CACHE_TTL_SEC = 86400  # 24 horas — COT (actualiza solo los viernes)
 
 
-def _is_cache_valid(key: str) -> bool:
-    return key in _cache and (time.time() - _cache_ts.get(key, 0)) < CACHE_TTL_SEC
+def _is_cache_valid(key: str, ttl: int = CACHE_TTL_SEC) -> bool:
+    return key in _cache and (time.time() - _cache_ts.get(key, 0)) < ttl
 
 
 # ── Crypto Fear & Greed Index ────────────────────────────────────
@@ -96,15 +101,186 @@ def get_vix() -> Optional[float]:
         return _cache.get(key)
 
 
+# ════════════════════════════════════════════════════════════════
+#  CFTC COT REPORT  (FASE 9)
+# ════════════════════════════════════════════════════════════════
+
+# Nombres de mercado en el reporte CFTC → símbolo interno
+_COT_MARKET_MAP = {
+    "EURO FX":              "EUR",
+    "BRITISH POUND":        "GBP",
+    "JAPANESE YEN":         "JPY",
+    "GOLD":                 "GOLD",
+    "SILVER":               "SILVER",
+    "CRUDE OIL, LIGHT SWEET": "OIL",
+    "S&P 500 STOCK INDEX":  "SP500",
+    "BITCOIN":              "BTC",
+}
+
+# Símbolo interno COT → símbolos Exness que aplican
+_COT_SYMBOL_COVERAGE = {
+    "EUR":    ["EURUSDm", "EURJPYm"],
+    "GBP":    ["GBPUSDm", "GBPJPYm"],
+    "JPY":    ["USDJPYm", "EURJPYm", "GBPJPYm"],
+    "GOLD":   ["XAUUSDm"],
+    "SILVER": ["XAGUSDm"],
+    "OIL":    ["USOILm"],
+    "SP500":  ["US500m"],
+    "BTC":    ["BTCUSDm"],
+}
+
+# URL del reporte COT (archivo de texto plano, sin key)
+_COT_URL = "https://www.cftc.gov/dea/newcot/deafut.txt"
+
+
+def _parse_cot_row(row: dict) -> Optional[dict]:
+    """
+    Extrae posición neta Non-Commercial de una fila del reporte COT.
+
+    El reporte deafut.txt tiene columnas:
+    'Market and Exchange Names', 'As of Date in Form YYYY-MM-DD',
+    'NonComm_Positions_Long_All', 'NonComm_Positions_Short_All', ...
+    """
+    try:
+        long_nc  = float(row.get("NonComm_Positions_Long_All",  0) or 0)
+        short_nc = float(row.get("NonComm_Positions_Short_All", 0) or 0)
+        net      = long_nc - short_nc
+        total    = long_nc + short_nc
+        return {
+            "net_position": net,
+            "long":         long_nc,
+            "short":        short_nc,
+            "total":        total,
+            "report_date":  row.get("As of Date in Form YYYY-MM-DD", ""),
+        }
+    except Exception:
+        return None
+
+
+def get_cot_data() -> Optional[dict]:
+    """
+    Descarga y parsea el reporte COT semanal de la CFTC.
+    Cache de 24 horas (el reporte se actualiza solo los viernes).
+
+    Retorna dict anidado:
+    {
+        "EUR":  {"net_position": 12345, "long": ..., "short": ...,
+                 "pct_change_weekly": ..., "positioning_bias": "BULLISH"},
+        "GBP":  {...},
+        ...
+    }
+    o None si falla la descarga.
+    """
+    key = "cot_data"
+    if _is_cache_valid(key, COT_CACHE_TTL_SEC):
+        return _cache[key]
+
+    try:
+        resp = requests.get(_COT_URL, timeout=20)
+        resp.raise_for_status()
+        content = resp.text
+    except Exception as e:
+        log.debug(f"[sentiment] Error descargando COT: {e}")
+        return _cache.get(key)
+
+    result = {}
+    try:
+        reader = csv.DictReader(io.StringIO(content))
+        # Mantener solo la entrada más reciente por mercado
+        latest: dict = {}
+        for row in reader:
+            market_raw = (row.get("Market and Exchange Names") or "").strip().upper()
+            for keyword, cot_key in _COT_MARKET_MAP.items():
+                if keyword in market_raw:
+                    parsed = _parse_cot_row(row)
+                    if parsed is None:
+                        continue
+                    if cot_key not in latest:
+                        latest[cot_key] = parsed
+                    # El CSV viene ordenado más reciente primero —
+                    # si ya tenemos entrada para este mercado, ignorar las siguientes.
+                    break
+
+        # Calcular sesgo de posicionamiento
+        for cot_key, data in latest.items():
+            net   = data["net_position"]
+            total = max(data["total"], 1)
+            pct   = round(net / total * 100, 1)
+
+            if pct > 10:
+                bias = "BULLISH"
+            elif pct < -10:
+                bias = "BEARISH"
+            else:
+                bias = "NEUTRAL"
+
+            result[cot_key] = {
+                "net_position":       round(net),
+                "long":               round(data["long"]),
+                "short":              round(data["short"]),
+                "pct_net":            pct,
+                "positioning_bias":   bias,
+                "report_date":        data["report_date"],
+                # pct_change_weekly requiere historial de semanas anteriores;
+                # se expone como 0.0 hasta que se implemente cache persistente.
+                "pct_change_weekly":  0.0,
+            }
+
+    except Exception as e:
+        log.debug(f"[sentiment] Error parseando COT: {e}")
+        return _cache.get(key)
+
+    if result:
+        _cache[key] = result
+        _cache_ts[key] = time.time()
+        log.info(f"[sentiment] COT cargado: {list(result.keys())}")
+
+    return result or None
+
+
+def _get_cot_for_symbol(symbol: str) -> Optional[dict]:
+    """
+    Retorna el dato COT aplicable al símbolo Exness dado.
+    Si varios COT aplican (e.g. EURJPYm → EUR y JPY), retorna el más reciente.
+    Respeta la bandera COT_ENABLED en config.py.
+    """
+    try:
+        import config as cfg
+        if not getattr(cfg, "COT_ENABLED", True):
+            return None
+    except Exception:
+        pass
+
+    cot_all = get_cot_data()
+    if cot_all is None:
+        return None
+
+    relevant = {}
+    for cot_key, symbols in _COT_SYMBOL_COVERAGE.items():
+        if symbol in symbols and cot_key in cot_all:
+            relevant[cot_key] = cot_all[cot_key]
+
+    if not relevant:
+        return None
+
+    # Para pares cruzados (e.g. EURJPY), devolver el COT con mayor |net|
+    return max(relevant.values(), key=lambda d: abs(d["net_position"]))
+
+
 # ── Mapa de símbolo → fuentes de sentimiento relevantes ─────────
 SYMBOL_SENTIMENT_MAP = {
-    "BTCUSDm": ["crypto_fng"],
-    "US500m":  ["vix"],
+    "BTCUSDm": ["crypto_fng", "cot"],
+    "US500m":  ["vix", "cot"],
     "NAS100m": ["vix"],
     "GER40m":  ["vix"],
-    "XAUUSDm": ["vix"],
-    "XAGUSDm": ["vix"],
-    "USOILm":  ["vix"],
+    "XAUUSDm": ["vix", "cot"],
+    "XAGUSDm": ["vix", "cot"],
+    "USOILm":  ["vix", "cot"],
+    "EURUSDm": ["cot"],
+    "GBPUSDm": ["cot"],
+    "USDJPYm": ["cot"],
+    "EURJPYm": ["cot"],
+    "GBPJPYm": ["cot"],
 }
 
 
@@ -119,6 +295,9 @@ def get_sentiment_for_symbol(symbol: str) -> dict:
         "crypto_fng_label": "Greed",
         "vix": 18.5,               # solo si aplica
         "vix_label": "Normal",
+        "cot_net_position": 12345, # solo si aplica
+        "cot_bias": "BULLISH",
+        "cot_change_pct": 0.0,
         "sentiment_bias": "NEUTRAL" # FEAR / GREED / NEUTRAL
     }
     """
@@ -153,10 +332,19 @@ def get_sentiment_for_symbol(symbol: str) -> dict:
             else:
                 result["vix_label"] = "Pánico"
 
+    if "cot" in sources:
+        cot = _get_cot_for_symbol(symbol)
+        if cot is not None:
+            result["cot_net_position"] = cot["net_position"]
+            result["cot_bias"]         = cot["positioning_bias"]
+            result["cot_change_pct"]   = cot["pct_change_weekly"]
+            result["cot_report_date"]  = cot.get("report_date", "")
+
     # Sesgo general de sentimiento
     bias = "NEUTRAL"
     fng_val = result.get("crypto_fng")
     vix_val = result.get("vix")
+    cot_bias = result.get("cot_bias")
 
     if fng_val is not None:
         if fng_val < 25:
@@ -168,6 +356,10 @@ def get_sentiment_for_symbol(symbol: str) -> dict:
             bias = "FEAR"
         elif vix_val < 14:
             bias = "GREED"
+    elif cot_bias is not None and cot_bias != "NEUTRAL":
+        # Usar COT como señal de sesgo si no hay otra fuente
+        bias = "GREED" if cot_bias == "BULLISH" else "FEAR"
 
     result["sentiment_bias"] = bias
     return result
+

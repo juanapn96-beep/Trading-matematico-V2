@@ -118,20 +118,62 @@ class MicrostructureResult:
 # ════════════════════════════════════════════════════════════════
 
 def volume_profile(
-    df:        pd.DataFrame,
-    n_candles: int   = 100,
-    n_bins:    int   = 50,
-    price:     float = 0.0,
+    df:             pd.DataFrame,
+    n_candles:      int                    = 100,
+    n_bins:         int                    = 50,
+    price:          float                  = 0.0,
+    real_volume_df: Optional[pd.DataFrame] = None,
 ) -> VolumeProfileResult:
     """
-    Perfil de Volumen basado en tick_volume de MT5/Exness.
+    Perfil de Volumen.
 
-    Distribuye el tick_volume de cada vela proporcionalmente
-    sobre su rango high-low y agrupa en n_bins buckets de precio.
+    Por defecto usa tick_volume de MT5/Exness.  Si se pasa real_volume_df
+    (DataFrame M5 de Dukascopy con volumen real), se usa ese volumen en
+    lugar del tick_volume del df de MT5.  En caso de fallo silencioso
+    se vuelve al tick_volume normal.
+
+    Distribuye el volumen de cada vela proporcionalmente sobre su rango
+    high-low y agrupa en n_bins buckets de precio.
     Calcula POC (bucket de máximo volumen) y Value Area (70 % del
     volumen total alrededor del POC).
     """
-    subset = df.tail(n_candles).copy().reset_index(drop=True)
+    # Si hay volumen real disponible, intentar usarlo como fuente de volumen
+    if real_volume_df is not None and len(real_volume_df) > 0:
+        try:
+            subset = df.tail(n_candles).copy().reset_index(drop=True)
+            # Merge real volume onto OHLC candles by nearest time match
+            rv = real_volume_df[["time", "volume"]].copy()
+            rv = rv.rename(columns={"volume": "real_vol"})
+            rv["time"] = pd.to_datetime(rv["time"])
+            if "time" in subset.columns:
+                subset["time"] = pd.to_datetime(subset["time"])
+                merged = pd.merge_asof(
+                    subset.sort_values("time"),
+                    rv.sort_values("time"),
+                    on="time",
+                    direction="nearest",
+                    tolerance=pd.Timedelta("10min"),
+                )
+                matched = merged["real_vol"].notna().sum()
+                # Requiere al menos 5 candles con match O cobertura del 50 % del
+                # subset — evita usar volumen real si hay muy pocos datos reales
+                # (e.g. Dukascopy devolvió solo 1-2 horas de un lookback de 4h).
+                if matched >= max(5, len(subset) // 2):
+                    # Use real volume where available, fall back to tick_volume
+                    merged["volume"] = merged["real_vol"].where(
+                        merged["real_vol"].notna(), merged["volume"]
+                    )
+                    subset = merged.drop(columns=["real_vol"])
+                    subset = subset.reset_index(drop=True)
+                    log.debug(
+                        f"[micro] volume_profile usando volumen real "
+                        f"({matched}/{len(subset)} candles)"
+                    )
+        except Exception as rv_err:
+            log.debug(f"[micro] Fallback a tick_volume: {rv_err}")
+            subset = df.tail(n_candles).copy().reset_index(drop=True)
+    else:
+        subset = df.tail(n_candles).copy().reset_index(drop=True)
     cur    = price or float(df["close"].iloc[-1])
 
     if len(subset) < 5:
@@ -458,13 +500,16 @@ def _micro_score_from_components(
 # ════════════════════════════════════════════════════════════════
 
 def compute_microstructure(
-    df:    pd.DataFrame,
-    price: float = 0.0,
+    df:             pd.DataFrame,
+    price:          float                  = 0.0,
+    real_volume_df: Optional[pd.DataFrame] = None,
 ) -> MicrostructureResult:
     """
     Calcula el Tercer Pilar (Microestructura) completo.
 
     Compatible con tick_volume de Exness / MT5 (sin Nivel 2 real).
+    Si se pasa real_volume_df (Dukascopy M5), se usa volumen real en el
+    Volume Profile.  Fallback silencioso a tick_volume si falla.
     Usa el DataFrame de velas recibido (funciona con cualquier TF).
     """
     cur = price or (float(df["close"].iloc[-1]) if df is not None and len(df) > 0 else 0.0)
@@ -485,7 +530,10 @@ def compute_microstructure(
         )
 
     try:
-        vp = volume_profile(df, n_candles=min(100, len(df)), n_bins=50, price=cur)
+        vp = volume_profile(
+            df, n_candles=min(100, len(df)), n_bins=50, price=cur,
+            real_volume_df=real_volume_df,
+        )
     except Exception as exc:
         log.debug(f"[micro] volume_profile error: {exc}")
         vp = VolumeProfileResult(
