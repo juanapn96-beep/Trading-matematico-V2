@@ -543,7 +543,7 @@ HTML_TEMPLATE = """
       `;
     }
 
-    function renderStatus(statusMap) {
+    function renderStatus(statusMap, detailMap) {
       const container = document.getElementById('statusList');
       const entries = Object.entries(statusMap || {});
       if (!entries.length) {
@@ -551,12 +551,23 @@ HTML_TEMPLATE = """
         return;
       }
 
-      container.innerHTML = entries.map(([symbol, status]) => `
-        <div class="status-item">
-          <strong>${symbol}</strong>
-          <div>${status}</div>
-        </div>
-      `).join('');
+      container.innerHTML = entries.map(([symbol, status]) => {
+        const d = (detailMap || {})[symbol] || {};
+        const regimeRow = d.enhanced_regime
+          ? `<div><span style="color:var(--muted)">Régimen:</span> ${d.enhanced_regime} <span style="color:var(--muted)">(${d.regime_confidence || '—'})</span></div>`
+          : '';
+        const zscoreRow = d.z_score != null
+          ? `<div><span style="color:var(--muted)">Z-Score:</span> ${parseFloat(d.z_score).toFixed(2)}</div>`
+          : '';
+        return `
+          <div class="status-item">
+            <strong>${symbol}</strong>
+            <div>${status}</div>
+            ${regimeRow}
+            ${zscoreRow}
+          </div>
+        `;
+      }).join('');
     }
 
     function renderGroqMetrics(metrics) {
@@ -691,7 +702,7 @@ HTML_TEMPLATE = """
         renderPositions(payload.active_trades || []);
         renderAnalysis(payload.last_groq_analysis || {});
         renderGroqMetrics(payload.groq_metrics || {});
-        renderStatus(payload.symbol_status || {});
+        renderStatus(payload.symbol_status || {}, payload.symbol_details || {});
         renderLastAction(payload);
         renderMemoryNews(payload);
         renderPerformance(payload.performance || {});
