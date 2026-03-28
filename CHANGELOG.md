@@ -47,6 +47,34 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-28 20:49 UTC] - FASE 12: ADF Stationarity Test + Z-Score Filter
+
+### modules/indicators.py
+- **`adf_stationarity_test(close, max_lags)`**: nueva función que ejecuta el test Augmented Dickey-Fuller sobre los retornos logarítmicos. Usa `statsmodels` si está disponible; si no, implementación OLS manual con numpy (valores críticos de MacKinnon 1994). Retorna `adf_statistic`, `p_value`, `is_stationary`, `used_lags`.
+- **`zscore_returns(close, lookback=50)`**: nueva función que calcula el Z-score del retorno más reciente respecto a la distribución de los últimos `lookback` retornos logarítmicos. Retorna `z_score`, `mean_return`, `std_return`, `signal` (`LONG_REVERSAL` / `SHORT_REVERSAL` / `NEUTRAL`), `strength` (0–1).
+- **`compute_all()` — integración ADF + Z-score tras Hurst**: tras calcular el exponente de Hurst, se ejecutan ADF y Z-score. El campo `enhanced_regime` puede ser `TRENDING`, `MEAN_REVERTING`, `MEAN_REVERTING_ADF` (zona gris Hurst + ADF estacionario) o `RANDOM_WALK` (zona gris Hurst + no estacionario). `regime_confidence` es `HIGH` / `MEDIUM` / `LOW`. Protegido con `try/except` para no romper flujo si falla.
+- **`compute_all()` — ajustes al score de confluencia**: si `enhanced_regime == "RANDOM_WALK"`, el score se multiplica por `RANDOM_WALK_PENALTY` (0.70). Si `enhanced_regime` es `MEAN_REVERTING` o `MEAN_REVERTING_ADF` y el Z-score señala reversal en la misma dirección, se añade un bonus de hasta `+ZSCORE_CONFLUENCE_BONUS * strength`. Score final reclampeado a `[-3.0, +3.0]`.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`build_context()`**: tras la línea de Hurst, se añaden líneas de régimen mejorado (`Régimen mejorado: X (confianza: Y)`), ADF (`stat / p-value / estacionario?`) y Z-score (si la señal no es NEUTRAL). Contexto más rico para Groq.
+- **`symbol_detail_cache`**: nuevo dict global `{symbol: {enhanced_regime, regime_confidence, z_score}}` poblado justo después de `compute_all()`. Incluido en `web_status_snapshot` como `symbol_details`.
+- **[Agente: GitHub Copilot]**
+
+### modules/web_dashboard.py
+- **`renderStatus(statusMap, detailMap)`**: función actualizada para aceptar el segundo argumento `detailMap` (= `payload.symbol_details`). Por cada símbolo muestra el régimen mejorado con confianza y el Z-score cuando están disponibles.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadidos 8 nuevos parámetros `FASE 12`: `ADF_ENABLED`, `ADF_PVALUE_THRESHOLD`, `ZSCORE_LOOKBACK`, `ZSCORE_ENTRY_THRESHOLD`, `HURST_GREY_ZONE_LOW`, `HURST_GREY_ZONE_HIGH`, `RANDOM_WALK_PENALTY`, `ZSCORE_CONFLUENCE_BONUS`.
+- **[Agente: GitHub Copilot]**
+
+### requirements.txt
+- Añadida dependencia opcional `statsmodels>=0.14.0`. Si no está instalada el bot sigue funcionando con la implementación numpy.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28 19:09 UTC] - FASE 10: Dashboard de Performance Avanzado
 
 ### modules/web_dashboard.py

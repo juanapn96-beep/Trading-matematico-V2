@@ -751,3 +751,15 @@ POLYGON_MAX_CALLS_PER_MIN    = 5
 # TrueFX (datos locales, sin API)
 TRUEFX_DATA_DIR              = os.path.join(os.path.dirname(__file__), "data", "truefx")
 TRUEFX_ENABLED               = os.path.isdir(TRUEFX_DATA_DIR)
+
+# ================================================================
+#  FASE 12 — ADF STATIONARITY + Z-SCORE FILTER
+# ================================================================
+ADF_ENABLED              = True    # Activar test ADF como complemento de Hurst
+ADF_PVALUE_THRESHOLD     = 0.05    # p-value máximo para considerar estacionario
+ZSCORE_LOOKBACK          = 50      # Ventana de lookback para Z-score
+ZSCORE_ENTRY_THRESHOLD   = 1.5     # Z-score mínimo para señal de reversal
+HURST_GREY_ZONE_LOW      = 0.42    # Límite inferior de zona gris de Hurst
+HURST_GREY_ZONE_HIGH     = 0.58    # Límite superior de zona gris de Hurst
+RANDOM_WALK_PENALTY      = 0.70    # Factor de penalización en confluencia para random walk
+ZSCORE_CONFLUENCE_BONUS  = 0.5     # Bonus máximo al score por Z-score alignment
