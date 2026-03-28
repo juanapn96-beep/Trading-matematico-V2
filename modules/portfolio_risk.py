@@ -102,9 +102,10 @@ def get_effective_portfolio_risk(
         return risk_per_trade * 100, False, "Sin posiciones correlacionadas"
 
     # Calcular varianza del portafolio
+    risk_sq = risk_per_trade ** 2
     variance = 0.0
     for i in range(n):
-        variance += risk_per_trade ** 2
+        variance += risk_sq
         for j in range(i + 1, n):
             sym_i, dir_i = positions[i]
             sym_j, dir_j = positions[j]
@@ -114,7 +115,7 @@ def get_effective_portfolio_risk(
             # correlación positiva, REDUCE el riesgo (cobertura parcial).
             same_direction = (dir_i == dir_j)
             sign_factor = 1.0 if same_direction else -1.0
-            variance += 2 * rho * sign_factor * risk_per_trade * risk_per_trade
+            variance += 2 * rho * sign_factor * risk_sq
 
     # Riesgo efectivo = desviación estándar del portafolio
     effective_risk = math.sqrt(max(0.0, variance))

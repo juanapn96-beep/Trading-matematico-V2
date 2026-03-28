@@ -19,6 +19,7 @@
 import sys
 import time
 import json
+import math
 import threading
 import re
 import logging
@@ -265,14 +266,14 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
         losses = int(mem_stats.get("losses", 0))
         be_count = total - wins - losses
         wr = float(mem_stats.get("win_rate", 0.0))
-        profit = float(mem_stats.get("profit", 0.0))
         avg_win = float(mem_stats.get("avg_win", 0.0))
         avg_loss = float(mem_stats.get("avg_loss", 0.0))
-        pf = abs(avg_win * wins / (avg_loss * losses)) if losses > 0 and avg_loss != 0 else 0.0
+        # Profit factor = ganancias_totales / pérdidas_totales
+        gross_wins  = avg_win  * wins   if wins   > 0 else 0.0
+        gross_losses = abs(avg_loss) * losses if losses > 0 else 0.0
+        pf = gross_wins / gross_losses if gross_losses > 0 else 0.0
         best = float(mem_stats.get("best_trade", 0.0))
         worst = float(mem_stats.get("worst_trade", 0.0))
-        # Rolling WR último 20 trades — no disponible directamente, se estima
-        rolling_wr = wr  # usar el global como proxy
         perf_payload = {
             "win_rate": wr,
             "profit_factor": round(pf, 2),
@@ -280,7 +281,7 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "wins": wins,
             "losses": losses,
             "breakeven": be_count,
-            "rolling_wr_20": round(rolling_wr, 1),
+            "rolling_wr_20": round(wr, 1),
             "max_drawdown_pct": round(float(mem_stats.get("max_drawdown_pct", 0.0)), 2),
             "best_trade": round(best, 2),
             "worst_trade": round(worst, 2),
@@ -296,7 +297,7 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
                 "symbol": getattr(p, "symbol", "?"),
                 "direction": "LONG" if getattr(p, "type", 0) == 0 else "SHORT",
             })
-        # Contar pares correlacionados
+        # Calcular riesgo efectivo reutilizando el módulo portfolio_risk
         from modules.portfolio_risk import _get_correlation
         corr_count = 0
         for i, p1 in enumerate(bot_positions):
@@ -304,18 +305,19 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
                 rho = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
                 if abs(rho) >= 0.60:
                     corr_count += 1
+        # Riesgo efectivo del portafolio existente (sin trade propuesto adicional)
         risk_per = getattr(cfg, "RISK_PER_TRADE", 0.01)
         n = len(bot_positions)
-        import math as _math
-        variance = n * risk_per ** 2
+        risk_sq = risk_per ** 2
+        variance = n * risk_sq
         for i, p1 in enumerate(bot_positions):
             for j in range(i + 1, n):
                 p2 = bot_positions[j]
                 rho = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
                 same_dir = (getattr(p1, "type", 0) == getattr(p2, "type", 0))
                 sign = 1.0 if same_dir else -1.0
-                variance += 2 * rho * sign * risk_per * risk_per
-        eff_risk = _math.sqrt(max(0.0, variance)) * 100
+                variance += 2 * rho * sign * risk_sq
+        eff_risk = math.sqrt(max(0.0, variance)) * 100
         portfolio_payload = {
             "open_positions": n,
             "effective_risk_pct": round(eff_risk, 1),

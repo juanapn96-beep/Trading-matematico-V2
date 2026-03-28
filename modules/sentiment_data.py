@@ -81,7 +81,9 @@ def get_vix() -> Optional[float]:
         # La última entrada tiene el valor más reciente
         if "data" in data and len(data["data"]) > 0:
             last_entry = data["data"][-1]
-            vix_val = float(last_entry.get("close", last_entry.get("value", 0)))
+            close_val = last_entry.get("close")
+            value_val = last_entry.get("value")
+            vix_val = float(close_val if close_val is not None else (value_val or 0))
         else:
             return _cache.get(key)
 

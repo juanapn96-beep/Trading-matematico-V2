@@ -337,7 +337,7 @@ HTML_TEMPLATE = """
 
     <section class="grid">
       <section class="panel">
-        <h2>📊 Performance Tracking</h2>
+        <h2>📊 Seguimiento de Rendimiento</h2>
         <div id="performanceMetrics" class="status-list"></div>
       </section>
 
