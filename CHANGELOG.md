@@ -4,6 +4,49 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
+
+### modules/data_providers.py *(nuevo)*
+- **`TwelveDataProvider`**: cliente REST para Twelve Data API — datos OHLCV en tiempo real de índices (US500m, NAS100m, GER40m) y forex donde MT5 no da volumen real. Métodos: `get_realtime_ohlcv()`, `get_quote()`. Cache en memoria con TTL de 5 min. Rate limiting: 8 calls/min (free tier 800/día). API key desde `.env`: `TWELVE_DATA_KEY`. Fallback silencioso si falla o key no configurada.
+- **`PolygonProvider`**: cliente REST para Polygon.io — datos de mercado US (SPX/NDX) con VWAP real y transaction count. Métodos: `get_aggregates()`, `get_snapshot()`. Cache en memoria con TTL de 5 min. Rate limiting: 5 req/min (free tier). API key desde `.env`: `POLYGON_KEY`. Fallback silencioso.
+- **`TrueFXLoader`**: lector de tick data CSV local en `data/truefx/`. Métodos: `load_ticks()`, `load_and_aggregate_m5()` (agrega ticks en candles M5 con volumen real), `load_range()`, `load_range_m5()`, `list_available_data()`. Sin API key, sin red. Los archivos >25MB no están en el repo (ver `.gitignore`).
+- **Singletons**: `get_twelve_data()`, `get_polygon()`, `get_truefx_loader()` — construcción lazy desde config.
+- **[Agente: GitHub Copilot]**
+
+### modules/indicators.py
+- **`compute_all()` — PILAR 3**: tras intentar Dukascopy real volume (FASE 9), si el símbolo está en `PolygonProvider.SYMBOL_MAP` → obtiene aggregates con VWAP real; si está en `TwelveDataProvider.SYMBOL_MAP` → obtiene OHLCV con volumen real. Ambas fuentes se usan como `real_volume_df` en `compute_microstructure()`. Añade campo `ctx["ext_data_source"]`: `"dukascopy"` | `"polygon"` | `"twelve_data"` | `"tick_volume"`.
+- **[Agente: GitHub Copilot]**
+
+### modules/backtester.py
+- **`load_data_truefx(symbol, start_date, end_date)`**: nuevo método — carga datos de TrueFX desde CSVs locales y los agrega en candles M5 via `TrueFXLoader.load_range_m5()`. Fallback con mensaje descriptivo si no hay archivos. Compatible con `run()` y `run_walk_forward()`.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`build_context()`**: bloque "DATOS EXTERNOS (FASE 11)" — si `POLYGON_ENABLED` o `TWELVE_DATA_ENABLED`, obtiene snapshot/quote y añade al contexto Groq: volumen real del día, VWAP (Polygon) y precio/cambio% (Twelve Data). También muestra `ext_data_source` activo.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Bloque FASE 11: `TWELVE_DATA_KEY`, `TWELVE_DATA_ENABLED`, `TWELVE_DATA_CACHE_TTL_MIN`, `TWELVE_DATA_MAX_CALLS_PER_MIN`, `POLYGON_KEY`, `POLYGON_ENABLED`, `POLYGON_CACHE_TTL_MIN`, `POLYGON_MAX_CALLS_PER_MIN`, `TRUEFX_DATA_DIR`, `TRUEFX_ENABLED`.
+- **[Agente: GitHub Copilot]**
+
+### run_backtest.py
+- Nuevo flag `--truefx`: carga datos de `data/truefx/` en vez de MT5. Detección automática de meses disponibles. Ejemplo: `python run_backtest.py --symbol EURUSDm --truefx --start 2025-11-01 --end 2026-01-31`.
+- **[Agente: GitHub Copilot]**
+
+### .env.example
+- Añadidas variables opcionales: `TWELVE_DATA_KEY`, `POLYGON_KEY`.
+- **[Agente: GitHub Copilot]**
+
+### .gitignore
+- Añadida entrada `data/truefx/` — los archivos CSV >25MB son solo locales.
+- **[Agente: GitHub Copilot]**
+
+### requirements.txt
+- Añadido `websocket-client>=1.6.0` (para Polygon WebSocket streaming futuro).
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28 19:09 UTC] - FASE 10: Dashboard de Performance Avanzado
 
 ### modules/web_dashboard.py

@@ -188,6 +188,50 @@ class Backtester:
             log.error(f"[backtester] Error cargando CSV {filepath}: {e}", exc_info=True)
             return False
 
+    def load_data_truefx(
+        self,
+        symbol: str,
+        start_date: str,
+        end_date: str,
+    ) -> bool:
+        """
+        Carga datos históricos de TrueFX (tick data CSV local) y los agrega en candles M5.
+
+        Los archivos deben existir en data/truefx/ con el formato:
+            EURUSD-YYYY-MM.csv (sin header, columnas: symbol,timestamp,bid,ask)
+
+        Args:
+            symbol:     Símbolo Exness (e.g. "EURUSDm")
+            start_date: Fecha inicio "YYYY-MM-DD"
+            end_date:   Fecha fin   "YYYY-MM-DD"
+
+        Returns:
+            True si se cargaron datos correctamente.
+        """
+        try:
+            from modules.data_providers import get_truefx_loader
+        except ImportError:
+            log.error("[backtester] modules/data_providers no disponible para TrueFX")
+            return False
+
+        loader = get_truefx_loader()
+        df = loader.load_range_m5(symbol, start_date, end_date)
+        if df is None or len(df) == 0:
+            log.error(
+                f"[backtester] TrueFX: no se encontraron datos para {symbol} "
+                f"en {start_date}–{end_date}. "
+                f"Verifica que existan archivos en data/truefx/"
+            )
+            return False
+
+        self._df = df
+        self._symbol = symbol
+        log.info(
+            f"[backtester] TrueFX: {len(df):,} candles M5 cargados para {symbol} "
+            f"({start_date} → {end_date})"
+        )
+        return True
+
     # ──────────────────────────────────────────────────────────────
     #  BACKTEST PRINCIPAL
     # ──────────────────────────────────────────────────────────────

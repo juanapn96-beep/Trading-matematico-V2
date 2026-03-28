@@ -71,6 +71,12 @@ from modules.web_dashboard import start_web_dashboard
 from modules.portfolio_risk import get_effective_portfolio_risk
 from modules.sentiment_data import get_sentiment_for_symbol
 
+try:
+    from modules.data_providers import get_twelve_data, get_polygon
+    _DATA_PROVIDERS_AVAILABLE = True
+except ImportError:
+    _DATA_PROVIDERS_AVAILABLE = False
+
 # ── Logging ──────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
@@ -978,6 +984,48 @@ def build_context(
     # ── PILAR 3: MICROESTRUCTURA ─────────────────────────────────
     micro = ind.get("microstructure", {})
     conf  = ind.get("confluence", {})
+
+    # ── DATOS EXTERNOS (FASE 11: Twelve Data / Polygon) ──────────
+    ext_data_source = ind.get("ext_data_source", "tick_volume")
+    if _DATA_PROVIDERS_AVAILABLE:
+        try:
+            td_enabled   = getattr(cfg, "TWELVE_DATA_ENABLED",  False)
+            poly_enabled = getattr(cfg, "POLYGON_ENABLED",      False)
+            ext_lines = []
+
+            if poly_enabled:
+                try:
+                    poly = get_polygon()
+                    if symbol in poly.SYMBOL_MAP:
+                        snap = poly.get_snapshot(symbol)
+                        if snap:
+                            ext_lines.append(
+                                f"Polygon {symbol}: Vol={snap['day_volume']:,.0f} | "
+                                f"VWAP={snap['day_vwap']:.2f} | Cambio={snap['change_pct']:+.2f}%"
+                            )
+                except Exception:
+                    pass
+
+            if td_enabled:
+                try:
+                    td = get_twelve_data()
+                    if symbol in td.SYMBOL_MAP:
+                        quote = td.get_quote(symbol)
+                        if quote:
+                            ext_lines.append(
+                                f"Twelve Data {symbol}: Vol={quote['volume']:,.0f} | "
+                                f"Precio={quote['close']:.2f} | Cambio={quote['percent_change']:+.2f}%"
+                            )
+                except Exception:
+                    pass
+
+            if ext_lines:
+                lines += ["── DATOS EXTERNOS (FASE 11) ──"] + ext_lines + [
+                    f"Fuente volumen activa: {ext_data_source}",
+                    "",
+                ]
+        except Exception:
+            pass
 
     fvg_bull = micro.get("fvg_bull")
     fvg_bear = micro.get("fvg_bear")

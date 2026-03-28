@@ -29,6 +29,7 @@ import numpy as np
 import pandas as pd
 import logging
 from dataclasses import dataclass, field
+from datetime import date as _date
 from typing import Optional
 
 from modules.microstructure import compute_microstructure
@@ -37,6 +38,12 @@ try:
     _REAL_VOLUME_AVAILABLE = True
 except ImportError:
     _REAL_VOLUME_AVAILABLE = False
+
+try:
+    from modules.data_providers import get_twelve_data, get_polygon
+    _EXT_PROVIDERS_AVAILABLE = True
+except ImportError:
+    _EXT_PROVIDERS_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 
@@ -827,6 +834,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         try:
             # FASE 9: intentar volumen real de Dukascopy para pares forex
             real_vol_df = None
+            ext_data_source = "tick_volume"
             if _REAL_VOLUME_AVAILABLE:
                 try:
                     import config as cfg
@@ -841,6 +849,41 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
                         lookback_hours=rv_hours,
                         cache_ttl_min=rv_ttl,
                     )
+                    if real_vol_df is not None:
+                        ext_data_source = "dukascopy"
+
+            # FASE 11: si Dukascopy no aplica, intentar Twelve Data o Polygon
+            # (principalmente para índices: US500m, NAS100m, GER40m)
+            if real_vol_df is None and _EXT_PROVIDERS_AVAILABLE:
+                try:
+                    import config as cfg11
+                    td_enabled   = getattr(cfg11, "TWELVE_DATA_ENABLED",  False)
+                    poly_enabled = getattr(cfg11, "POLYGON_ENABLED",      False)
+                except Exception:
+                    td_enabled = poly_enabled = False
+
+                if poly_enabled:
+                    try:
+                        poly = get_polygon()
+                        if symbol in poly.SYMBOL_MAP:
+                            today_str = _date.today().strftime("%Y-%m-%d")
+                            poly_df = poly.get_aggregates(symbol, from_date=today_str, to_date=today_str)
+                            if poly_df is not None and len(poly_df) > 0:
+                                real_vol_df = poly_df
+                                ext_data_source = "polygon"
+                    except Exception as poly_err:
+                        log.debug(f"[indicators] Polygon fallback: {poly_err}")
+
+                if real_vol_df is None and td_enabled:
+                    try:
+                        td = get_twelve_data()
+                        if symbol in td.SYMBOL_MAP:
+                            td_df = td.get_realtime_ohlcv(symbol, interval="5min", outputsize=100)
+                            if td_df is not None and len(td_df) > 0:
+                                real_vol_df = td_df
+                                ext_data_source = "twelve_data"
+                    except Exception as td_err:
+                        log.debug(f"[indicators] TwelveData fallback: {td_err}")
 
             micro     = compute_microstructure(
                 micro_df,
@@ -850,6 +893,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
             ctx["microstructure"] = micro.to_dict()
             ctx["microstructure"]["source_tf"] = "ENTRY" if micro_df is df_entry else "TREND"
             ctx["microstructure"]["vol_source"] = "real" if real_vol_df is not None else "tick"
+            ctx["ext_data_source"] = ext_data_source
         except Exception as micro_err:
             log.debug(f"[indicators] Microstructure error en {symbol}: {micro_err}")
             ctx["microstructure"] = {
@@ -858,6 +902,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
                 "source_tf": "UNKNOWN",
                 "vol_source": "tick",
             }
+            ctx["ext_data_source"] = "tick_volume"
 
         # ══════════════════════════════════════════════════════════
         #  CONFLUENCIA — MATRIZ DE 3 PILARES (FASE 1)
