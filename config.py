@@ -680,6 +680,27 @@ WEB_DASHBOARD_HOST = "127.0.0.1"
 WEB_DASHBOARD_PORT = 8765
 
 # ================================================================
+#  FASE 8 — BACKTESTING HISTÓRICO
+# ================================================================
+# Balance inicial para la simulación de trades en el backtester.
+# No afecta al bot en vivo — solo se usa en run_backtest.py y
+# modules/backtester.py para calcular métricas relativas al capital.
+BACKTEST_INITIAL_BALANCE = 10000.0
+
+# Rango de fechas por defecto cuando se ejecuta sin --start / --end.
+BACKTEST_DEFAULT_START = "2023-01-01"
+BACKTEST_DEFAULT_END   = "2025-12-31"
+
+# Walk-Forward Testing: parámetros de la ventana deslizante.
+# Lógica: [train_months] de datos IS → evaluar [test_months] OOS →
+# avanzar [step_months] → repetir hasta cubrir el período completo.
+# Un step_months pequeño (1) genera más ventanas y mayor robustez
+# estadística, pero tarda más en correr.
+BACKTEST_WALK_FORWARD_TRAIN_MONTHS = 6   # Meses de ventana in-sample
+BACKTEST_WALK_FORWARD_TEST_MONTHS  = 2   # Meses de ventana out-of-sample
+BACKTEST_WALK_FORWARD_STEP_MONTHS  = 1   # Avance por iteración
+
+# ================================================================
 #  PRESUPUESTO GROQ (CONTROL DURO DE COSTO)
 # ================================================================
 # Configurado vía variables de entorno GROQ_MAX_CALLS_PER_HOUR y

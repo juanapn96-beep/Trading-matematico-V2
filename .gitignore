@@ -43,3 +43,6 @@ ENV/
 # Windows
 Thumbs.db
 ehthumbs.db
+
+# FASE 8 — Resultados de backtesting (generados en ejecución)
+backtest_results/

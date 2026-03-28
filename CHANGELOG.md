@@ -4,6 +4,57 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-28 18:32 UTC] - FASE 8: Backtesting Histórico Completo
+
+### modules/backtester.py *(nuevo)*
+- **Creada** clase `Backtester` con motor de backtesting histórico completo.
+- **`load_data_mt5(symbol, timeframe, date_from, date_to)`**: descarga datos históricos de MT5 via `mt5.copy_rates_range()` usando las mismas credenciales de `.env` / broker Exness. No requiere API externa.
+- **`load_data_csv(filepath)`**: carga datos desde CSV (modo offline, sin MT5 abierto). Columnas requeridas: `time,open,high,low,close,volume`.
+- **`run(symbol, sym_cfg)`**: ejecuta backtest completo con ventana deslizante de 300 barras. Evalúa señales puramente matemáticas **sin Groq/LLM** — mide el edge real de los 3 pilares + filtros.
+- **`run_walk_forward(symbol, sym_cfg, train_months, test_months, step_months)`**: Walk-Forward Testing completo (ventana IS → test OOS → avanzar → repetir). Detecta overfitting comparando métricas IS vs OOS.
+- **`_simulate_bar(bar_index, df_window, symbol, sym_cfg)`**: evalúa la señal de entrada en cada barra reutilizando `compute_all()` de `indicators.py`. Filtros aplicados: ATR mínimo, Hurst ≥ `min_hurst`, confluencia total ≥ `CONFLUENCE_MIN_SCORE`, `h1_trend` alineado con dirección, Hilbert no bloquea, anti-contra-tendencia (Kalman + SuperTrend), R:R válido via `is_rr_valid()`.
+- **`_check_open_trades(bar, open_trades, closed_trades)`**: gestiona trades abiertos barra a barra — cierra por SL/TP y aplica trailing stop proporcional.
+- **`_apply_trailing(trade, current_price)`**: replica exactamente las 5 etapas de `_manage_trailing_stop()` de `main.py` (Lock 15%@30%, 35%@50%, 50%@70%, 70%@85%).
+- **`_calculate_metrics(trades, symbol, df)`**: calcula Win Rate (Wins/Decisive×100), Profit Factor, Sharpe Ratio (√252 anualizado), Max Drawdown peak-to-trough, Avg R:R, Avg duración, Best/Worst trade en pips.
+- Breakeven se detecta automáticamente cuando `|pnl_pips| < risk × 5%`.
+- **[Agente: GitHub Copilot]**
+
+### modules/backtest_report.py *(nuevo)*
+- **`print_summary(metrics, symbol)`**: imprime resumen en consola con tabla de métricas y comparación con benchmarks mínimos aceptables (✅/❌). Veredicto global al final.
+- **`print_walk_forward_summary(wf_results, symbol)`**: tabla comparativa de todas las ventanas IS vs OOS con advertencia de overfitting si WR decay > 10% o PF decay > 0.5.
+- **`export_trades_csv(trades, filepath)`**: exporta lista de `SimTrade` a CSV con todas las columnas (entrada, salida, resultado, pnl, RR, duración).
+- **`export_metrics_csv(metrics_list, filepath)`**: exporta lista de `BacktestMetrics` a CSV (útil para comparar símbolos o ventanas WF).
+- Benchmarks de referencia: Win Rate ≥ 45%, Profit Factor ≥ 1.3, Sharpe ≥ 0.5, Max DD ≤ 15%.
+- **[Agente: GitHub Copilot]**
+
+### run_backtest.py *(nuevo, raíz del repo)*
+- **Script CLI** para ejecutar backtests desde terminal.
+- `--symbol SYM` o `--all` (todos los símbolos de `config.SYMBOLS`).
+- `--start YYYY-MM-DD`, `--end YYYY-MM-DD` — rango de fechas.
+- `--walk-forward` — activa Walk-Forward Testing.
+- `--train-months`, `--test-months`, `--step-months` — parámetros de ventana WF.
+- `--csv-input FILE` — cargar datos desde CSV (modo offline sin MT5).
+- `--export` — exportar resultados a `backtest_results/` en CSV.
+- `--balance USD` — balance inicial para métricas (default: `BACKTEST_INITIAL_BALANCE`).
+- Al terminar, imprime resumen de métricas con comparación de benchmarks.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadido bloque **`FASE 8 — BACKTESTING HISTÓRICO`** con:
+  - `BACKTEST_INITIAL_BALANCE = 10000.0`
+  - `BACKTEST_DEFAULT_START = "2023-01-01"`
+  - `BACKTEST_DEFAULT_END = "2025-12-31"`
+  - `BACKTEST_WALK_FORWARD_TRAIN_MONTHS = 6`
+  - `BACKTEST_WALK_FORWARD_TEST_MONTHS = 2`
+  - `BACKTEST_WALK_FORWARD_STEP_MONTHS = 1`
+- **[Agente: GitHub Copilot]**
+
+### .gitignore
+- Añadida exclusión `backtest_results/` — carpeta de resultados generados en ejecución (no commitear).
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28 17:00 UTC] - FASE 7: Integración de correcciones críticas + nuevos módulos
 
 ### modules/indicators.py
