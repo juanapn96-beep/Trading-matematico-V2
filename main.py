@@ -116,6 +116,7 @@ last_action:         str   = ""
 ind_cache:           dict  = {}
 sr_cache:            dict  = {}
 symbol_status_cache: dict  = {}
+symbol_detail_cache: dict  = {}  # FASE 12: {symbol: {enhanced_regime: str, regime_confidence: "HIGH"|"MEDIUM"|"LOW", z_score: float|None}}
 
 news_pause_notified:   dict = {}
 memory_block_notified: dict = {}
@@ -336,6 +337,7 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "last_action": last_action,
             "active_trades": [_serialize_position_for_web(pos) for pos in open_positions],
             "symbol_status": dict(symbol_status_cache),
+            "symbol_details": dict(symbol_detail_cache),
             "memory": mem_stats,
             "news": news_payload,
             "shared_news_fetched_at": getattr(shared_news_cache, "fetched_at", "") if shared_news_cache is not None else "",
@@ -850,6 +852,27 @@ def build_context(
         f"  Período ciclo:  {hilbert.get('period', 0):.1f} velas",
         f"  Fuerza ciclo:   {hilbert.get('strength', 0):.3f}",
         f"HURST: {hurst:.3f} → {ind.get('hurst_regime','?')} | min={sym_cfg.get('min_hurst',0.5):.2f}",
+    ]
+
+    # ── FASE 12: ADF + Z-score — régimen mejorado ──
+    adf = ind.get("adf_test", {})
+    zsc = ind.get("zscore_returns", {})
+    enhanced_regime = ind.get("enhanced_regime", "UNKNOWN")
+    regime_conf = ind.get("regime_confidence", "LOW")
+
+    lines.append(f"Régimen mejorado: {enhanced_regime} (confianza: {regime_conf})")
+    if adf.get("p_value", 1.0) < 1.0:
+        lines.append(
+            f"ADF: stat={adf.get('adf_statistic', 0):.3f} p={adf.get('p_value', 1):.3f} "
+            f"{'✓ estacionario' if adf.get('is_stationary') else '✗ no estacionario'}"
+        )
+    if zsc.get("signal", "NEUTRAL") != "NEUTRAL":
+        lines.append(
+            f"Z-Score: {zsc.get('z_score', 0):.2f} → {zsc.get('signal')} "
+            f"(fuerza: {zsc.get('strength', 0):.0%})"
+        )
+
+    lines += [
         f"KALMAN: precio={ind.get('kalman_price',0):.4f} | tend={ind.get('kalman_trend','?')} | slope={ind.get('kalman_slope',0):.5f}",
         f"FISHER: {ind.get('fisher',0):.3f} | señal={ind.get('fisher_signal',0):.3f} | cruce={ind.get('fisher_cross','?')}",
         f"FOURIER: período={fourier.get('dominant_period','?')}v | fuerza={fourier.get('strength',0):.3f}",
@@ -1700,6 +1723,11 @@ def _process_symbol(
 
     ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
     ind_cache[symbol] = ind
+    symbol_detail_cache[symbol] = {
+        "enhanced_regime":   ind.get("enhanced_regime", "UNKNOWN"),
+        "regime_confidence": ind.get("regime_confidence", "LOW"),
+        "z_score":           ind.get("zscore_returns", {}).get("z_score", None),
+    }
 
     if has_bot_position:
         _set_symbol_status(symbol, f"📂 Posición abierta ({len(bot_sym_positions)}/{max_per_symbol}) — gestionando")

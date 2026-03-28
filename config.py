@@ -731,3 +731,16 @@ BACKTEST_WALK_FORWARD_STEP_MONTHS  = 1   # Avance por iteración
 # GROQ_MAX_CALLS_PER_DAY (ver sección GROQ al inicio de este archivo).
 # 0 = desactivado. Si se define >0, el bot no hará más llamadas una vez
 # alcanzado el límite y usará fallback HOLD para evitar gasto excedente.
+
+
+# ================================================================
+#  FASE 12 — ADF STATIONARITY + Z-SCORE FILTER
+# ================================================================
+ADF_ENABLED              = True    # Activar test ADF como complemento de Hurst
+ADF_PVALUE_THRESHOLD     = 0.05    # p-value máximo para considerar estacionario
+ZSCORE_LOOKBACK          = 50      # Ventana de lookback para Z-score
+ZSCORE_ENTRY_THRESHOLD   = 1.5     # Z-score mínimo para señal de reversal
+HURST_GREY_ZONE_LOW      = 0.42    # Límite inferior de zona gris de Hurst
+HURST_GREY_ZONE_HIGH     = 0.58    # Límite superior de zona gris de Hurst
+RANDOM_WALK_PENALTY      = 0.70    # Factor de penalización en confluencia para random walk
+ZSCORE_CONFLUENCE_BONUS  = 0.5     # Bonus máximo al score por Z-score alignment

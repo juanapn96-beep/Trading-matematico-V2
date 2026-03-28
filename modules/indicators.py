@@ -563,6 +563,143 @@ def adaptive_linear_regression(close: pd.Series, period: int = 50):
 
 
 # ══════════════════════════════════════════════════════════════════
+#  FASE 12 — ADF STATIONARITY TEST + Z-SCORE FILTER
+# ══════════════════════════════════════════════════════════════════
+
+def adf_stationarity_test(close: pd.Series, max_lags: int = None) -> dict:
+    """
+    Augmented Dickey-Fuller test para estacionariedad de retornos.
+
+    Testea si los retornos logarítmicos de la serie son estacionarios
+    (= el precio tiende a revertir a la media).
+
+    Args:
+        close: Serie de precios de cierre
+        max_lags: Máximo de lags para el test (None = auto)
+
+    Returns:
+        dict con:
+            - adf_statistic: float — estadístico ADF (más negativo = más estacionario)
+            - p_value: float — p-value (< 0.05 = estacionario al 95% confianza)
+            - is_stationary: bool — True si p_value < 0.05
+            - used_lags: int — número de lags usados
+    """
+    prices = close.dropna().values.astype(float)
+    if len(prices) < 30:
+        return {"adf_statistic": 0.0, "p_value": 1.0, "is_stationary": False, "used_lags": 0}
+
+    log_returns = np.diff(np.log(prices))
+
+    try:
+        from statsmodels.tsa.stattools import adfuller
+        result = adfuller(log_returns, maxlag=max_lags, autolag='AIC')
+        return {
+            "adf_statistic": round(float(result[0]), 4),
+            "p_value": round(float(result[1]), 4),
+            "is_stationary": float(result[1]) < 0.05,
+            "used_lags": int(result[2]),
+        }
+    except ImportError:
+        # Implementación simplificada sin statsmodels
+        # Regresión OLS: Δy_t = α + β*y_{t-1} + ε_t (sin lags adicionales)
+        n = len(log_returns)
+        if n < 20:
+            return {"adf_statistic": 0.0, "p_value": 1.0, "is_stationary": False, "used_lags": 0}
+
+        y = log_returns[1:]      # Δy_t
+        y_lag = log_returns[:-1]  # y_{t-1}
+
+        X = np.column_stack([np.ones(len(y_lag)), y_lag])
+        try:
+            beta = np.linalg.lstsq(X, y, rcond=None)[0]
+            residuals = y - X @ beta
+            se_beta = np.sqrt(
+                np.sum(residuals ** 2) / (len(y) - 2) /
+                np.sum((y_lag - y_lag.mean()) ** 2)
+            )
+            t_stat = beta[1] / se_beta if se_beta > 0 else 0.0
+        except Exception:
+            t_stat = 0.0
+
+        # Valores críticos ADF aproximados (MacKinnon 1994) con constante.
+        # Más precisos para N > 100; para N en 20-100 son una aproximación
+        # conservadora — puede subvalorar la estacionariedad en muestras pequeñas.
+        # 1%: -3.43, 5%: -2.86, 10%: -2.57
+        if t_stat < -3.43:
+            p_value_approx = 0.01
+        elif t_stat < -2.86:
+            p_value_approx = 0.05
+        elif t_stat < -2.57:
+            p_value_approx = 0.10
+        else:
+            p_value_approx = 0.50
+
+        return {
+            "adf_statistic": round(float(t_stat), 4),
+            "p_value": round(float(p_value_approx), 4),
+            "is_stationary": p_value_approx < 0.05,
+            "used_lags": 0,
+        }
+
+
+def zscore_returns(close: pd.Series, lookback: int = 50) -> dict:
+    """
+    Calcula el Z-score de los retornos recientes respecto a su distribución histórica.
+
+    Sirve para detectar precios "anormalmente" altos o bajos comparados
+    con su comportamiento reciente — señal de mean reversion inminente.
+
+    Args:
+        close: Serie de precios de cierre
+        lookback: Ventana para calcular media y desviación estándar
+
+    Returns:
+        dict con:
+            - z_score: float — Z-score actual (< -1.5 = muy bajo, > +1.5 = muy alto)
+            - mean_return: float — media de retornos en la ventana
+            - std_return: float — desviación estándar de retornos
+            - signal: str — "LONG_REVERSAL" | "SHORT_REVERSAL" | "NEUTRAL"
+            - strength: float — 0.0-1.0, qué tan extremo es el Z-score
+    """
+    prices = close.dropna().values.astype(float)
+    if len(prices) < lookback + 5:
+        return {"z_score": 0.0, "mean_return": 0.0, "std_return": 0.0,
+                "signal": "NEUTRAL", "strength": 0.0}
+
+    log_returns = np.diff(np.log(prices))
+
+    window_returns = log_returns[-lookback:]
+    recent_return = log_returns[-1]
+
+    mean_r = float(np.mean(window_returns))
+    std_r = float(np.std(window_returns, ddof=1))
+
+    if std_r < 1e-10:
+        return {"z_score": 0.0, "mean_return": mean_r, "std_return": std_r,
+                "signal": "NEUTRAL", "strength": 0.0}
+
+    z = (recent_return - mean_r) / std_r
+
+    signal = "NEUTRAL"
+    strength = 0.0
+
+    if z < -1.5:
+        signal = "LONG_REVERSAL"
+        strength = min(1.0, abs(z) / 3.0)
+    elif z > 1.5:
+        signal = "SHORT_REVERSAL"
+        strength = min(1.0, abs(z) / 3.0)
+
+    return {
+        "z_score": round(float(z), 4),
+        "mean_return": round(mean_r, 6),
+        "std_return": round(std_r, 6),
+        "signal": signal,
+        "strength": round(strength, 4),
+    }
+
+
+# ══════════════════════════════════════════════════════════════════
 #  FUNCIÓN PRINCIPAL — compute_all()
 # ══════════════════════════════════════════════════════════════════
 
@@ -708,6 +845,64 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
             "ALEATORIO" if h_exp > 0.45 else
             "REVERSION"
         )
+
+        # ── ADF + Z-score (FASE 12: complemento de Hurst para zona gris) ──
+        try:
+            from config import (
+                ADF_ENABLED, ADF_PVALUE_THRESHOLD,
+                ZSCORE_LOOKBACK, HURST_GREY_ZONE_LOW, HURST_GREY_ZONE_HIGH,
+            )
+        except ImportError:
+            ADF_ENABLED = True
+            ADF_PVALUE_THRESHOLD = 0.05
+            ZSCORE_LOOKBACK = 50
+            HURST_GREY_ZONE_LOW = 0.42
+            HURST_GREY_ZONE_HIGH = 0.58
+
+        try:
+            if ADF_ENABLED:
+                adf_result = adf_stationarity_test(close, max_lags=None)
+                zscore_result = zscore_returns(close, lookback=ZSCORE_LOOKBACK)
+            else:
+                adf_result = {"adf_statistic": 0.0, "p_value": 1.0, "is_stationary": False, "used_lags": 0}
+                zscore_result = {"z_score": 0.0, "mean_return": 0.0, "std_return": 0.0, "signal": "NEUTRAL", "strength": 0.0}
+
+            ctx["adf_test"] = adf_result
+            ctx["zscore_returns"] = zscore_result
+
+            # Régimen mejorado: Hurst + ADF combinados
+            hurst_val = ctx.get("hurst", 0.5)
+            enhanced_regime = ctx.get("hurst_regime", "UNKNOWN")
+
+            # Mapear hurst_regime a enhanced_regime
+            if enhanced_regime == "TENDENCIA":
+                enhanced_regime = "TRENDING"
+            elif enhanced_regime == "REVERSION":
+                enhanced_regime = "MEAN_REVERTING"
+            else:
+                enhanced_regime = "RANDOM_WALK"
+
+            # Si Hurst está en zona gris, usar ADF para decidir
+            if HURST_GREY_ZONE_LOW <= hurst_val <= HURST_GREY_ZONE_HIGH:
+                if adf_result["is_stationary"]:
+                    enhanced_regime = "MEAN_REVERTING_ADF"
+                else:
+                    enhanced_regime = "RANDOM_WALK"
+
+            ctx["enhanced_regime"] = enhanced_regime
+            ctx["market_regime"] = enhanced_regime  # alias para compatibilidad
+            ctx["regime_confidence"] = (
+                "HIGH" if (hurst_val > 0.6 or hurst_val < 0.4) else
+                ("MEDIUM" if adf_result["is_stationary"] else "LOW")
+            )
+
+        except Exception as e:
+            log.debug(f"[indicators] ADF/Z-score error: {e}")
+            ctx["adf_test"] = {"adf_statistic": 0.0, "p_value": 1.0, "is_stationary": False, "used_lags": 0}
+            ctx["zscore_returns"] = {"z_score": 0.0, "mean_return": 0.0, "std_return": 0.0, "signal": "NEUTRAL", "strength": 0.0}
+            ctx["enhanced_regime"] = ctx.get("hurst_regime", "UNKNOWN")
+            ctx["market_regime"] = ctx["enhanced_regime"]
+            ctx["regime_confidence"] = "LOW"
 
         # Kalman: ruido de observación R y proceso Q adaptativos
         # Mayor ATR% → mercado más ruidoso → R más alto → filtro más suave
@@ -900,6 +1095,39 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
 
             # Weighted confluence
             conf_total = round(0.40 * p1_score + 0.30 * p2_score + 0.30 * p3_score, 2)
+
+            # ── FASE 12: ADF/Z-score ajustes al score de confluencia ──
+            try:
+                from config import (
+                    RANDOM_WALK_PENALTY, ZSCORE_CONFLUENCE_BONUS,
+                    ZSCORE_ENTRY_THRESHOLD,
+                )
+            except ImportError:
+                RANDOM_WALK_PENALTY = 0.70
+                ZSCORE_CONFLUENCE_BONUS = 0.5
+                ZSCORE_ENTRY_THRESHOLD = 1.5
+
+            enhanced_regime = ctx.get("enhanced_regime", "UNKNOWN")
+            zscore_data = ctx.get("zscore_returns", {})
+            zscore_signal = zscore_data.get("signal", "NEUTRAL")
+            zscore_strength = zscore_data.get("strength", 0.0)
+
+            # Penalización para random walk: reducir score un 30%
+            if enhanced_regime == "RANDOM_WALK":
+                conf_total = round(conf_total * RANDOM_WALK_PENALTY, 2)
+
+            # Bonus/ajuste Z-score para mean reversion confirmada:
+            # LONG_REVERSAL → precio anormalmente bajo → suma al score (favorece BUY)
+            # SHORT_REVERSAL → precio anormalmente alto → resta del score (favorece SELL)
+            if enhanced_regime in ("MEAN_REVERTING", "MEAN_REVERTING_ADF"):
+                if zscore_signal == "LONG_REVERSAL":
+                    conf_total = round(conf_total + zscore_strength * ZSCORE_CONFLUENCE_BONUS, 2)
+                elif zscore_signal == "SHORT_REVERSAL":
+                    conf_total = round(conf_total - zscore_strength * ZSCORE_CONFLUENCE_BONUS, 2)
+
+            # Reclamp después de ajustes
+            conf_total = round(max(-3.0, min(3.0, conf_total)), 2)
+
             conf_bias  = (
                 "BULLISH" if conf_total >=  1.0 else
                 "BEARISH" if conf_total <= -1.0 else
