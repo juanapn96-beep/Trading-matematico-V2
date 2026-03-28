@@ -690,6 +690,20 @@ WEB_DASHBOARD_HOST = "127.0.0.1"
 WEB_DASHBOARD_PORT = 8765
 
 # ================================================================
+#  FASE 10 — DASHBOARD AVANZADO (visualizaciones gráficas)
+# ================================================================
+# Balance inicial usado para reconstruir la equity curve en el
+# dashboard (no afecta al bot en vivo — solo lectura de SQLite).
+DASHBOARD_EQUITY_INITIAL      = 10000.0   # Balance inicial de la equity curve
+# Ventana deslizante para el cálculo del Rolling Win Rate.
+DASHBOARD_ROLLING_WR_WINDOW   = 20        # Últimos N trades para Rolling WR
+# Número de trades recientes mostrados en la tabla del dashboard.
+DASHBOARD_RECENT_TRADES_LIMIT = 50        # Últimos N trades en la tabla
+# Intervalo de refresco de los gráficos Chart.js (más lento que el status
+# principal porque las queries son más pesadas).
+DASHBOARD_CHART_REFRESH_SEC   = 30        # Refresh de gráficos (segundos)
+
+# ================================================================
 #  FASE 8 — BACKTESTING HISTÓRICO
 # ================================================================
 # Balance inicial para la simulación de trades en el backtester.

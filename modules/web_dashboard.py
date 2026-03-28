@@ -4,6 +4,28 @@ from datetime import datetime, timezone
 
 from flask import Flask, jsonify, render_template_string
 
+try:
+    from config import (
+        DASHBOARD_EQUITY_INITIAL,
+        DASHBOARD_ROLLING_WR_WINDOW,
+        DASHBOARD_RECENT_TRADES_LIMIT,
+        DASHBOARD_CHART_REFRESH_SEC,
+        BACKTEST_INITIAL_BALANCE,
+    )
+except ImportError:
+    DASHBOARD_EQUITY_INITIAL = 10000.0
+    DASHBOARD_ROLLING_WR_WINDOW = 20
+    DASHBOARD_RECENT_TRADES_LIMIT = 50
+    DASHBOARD_CHART_REFRESH_SEC = 30
+    BACKTEST_INITIAL_BALANCE = 10000.0
+
+try:
+    from modules.neural_brain import get_equity_curve_data, get_distribution_data, get_recent_trades
+except ImportError:
+    def get_equity_curve_data(*a, **kw): return []
+    def get_distribution_data(): return {"by_symbol": [], "by_hour": []}
+    def get_recent_trades(*a, **kw): return []
+
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -12,6 +34,7 @@ HTML_TEMPLATE = """
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>ZAR Web Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
   <style>
     :root {
       --bg: #08131f;
@@ -255,6 +278,68 @@ HTML_TEMPLATE = """
         display: none;
       }
     }
+
+    /* ── FASE 10: Advanced Charts ── */
+    .section-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      cursor: pointer;
+      user-select: none;
+      padding: 4px 0 12px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 16px;
+    }
+    .section-title::after {
+      content: "▾";
+      margin-left: auto;
+      font-size: 18px;
+      color: var(--muted);
+      transition: transform 0.2s;
+    }
+    .section-title.collapsed::after {
+      transform: rotate(-90deg);
+    }
+    .collapsible-body { overflow: hidden; }
+    .collapsible-body.collapsed { display: none; }
+
+    .chart-container {
+      position: relative;
+      width: 100%;
+      min-height: 220px;
+    }
+    .chart-empty {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 180px;
+      color: var(--muted);
+      font-size: 14px;
+      border: 1px dashed var(--line);
+      border-radius: 12px;
+    }
+
+    .chart-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 18px;
+    }
+    @media (max-width: 920px) {
+      .chart-grid { grid-template-columns: 1fr; }
+    }
+
+    /* Recent Trades Table */
+    .trades-table-wrap {
+      overflow-x: auto;
+      max-height: 420px;
+      overflow-y: auto;
+    }
+    .result-win  { color: #00d4aa; font-weight: 700; }
+    .result-loss { color: #ff6b6b; font-weight: 700; }
+    .result-be   { color: #888; font-weight: 600; }
+    .row-win  { background: rgba(0, 212, 170, 0.04); }
+    .row-loss { background: rgba(255, 107, 107, 0.04); }
+    .row-be   { background: transparent; }
   </style>
 </head>
 <body>
@@ -346,6 +431,62 @@ HTML_TEMPLATE = """
         <div id="portfolioRisk" class="status-list"></div>
       </section>
     </section>
+
+    <!-- ══ FASE 10: Advanced Performance Dashboard ══ -->
+
+    <section class="panel">
+      <div class="section-title" onclick="toggleSection(this)">📈 Equity Curve &amp; Drawdown</div>
+      <div class="collapsible-body">
+        <div class="chart-container"><canvas id="equityCurveChart"></canvas></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title" onclick="toggleSection(this)">📉 Rolling Win Rate (ventana {{ rolling_wr_window }} trades)</div>
+      <div class="collapsible-body">
+        <div class="chart-container"><canvas id="rollingWrChart"></canvas></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title" onclick="toggleSection(this)">🗂️ Distribución por Símbolo y Hora</div>
+      <div class="collapsible-body">
+        <div class="chart-grid">
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">Win Rate por símbolo</div>
+            <div class="chart-container"><canvas id="symbolDistChart"></canvas></div>
+          </div>
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">Trades por hora UTC</div>
+            <div class="chart-container"><canvas id="hourDistChart"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title" onclick="toggleSection(this)">📋 Trades Recientes</div>
+      <div class="collapsible-body">
+        <div class="trades-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Símbolo</th>
+                <th>Dir</th>
+                <th>Entrada</th>
+                <th>Salida</th>
+                <th>Profit</th>
+                <th>Pips</th>
+                <th>Duración</th>
+                <th>Resultado</th>
+              </tr>
+            </thead>
+            <tbody id="recentTradesTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
   </main>
 
   <script>
@@ -354,6 +495,12 @@ HTML_TEMPLATE = """
 
     function setText(id, value) {
       document.getElementById(id).textContent = value;
+    }
+
+    // ── Collapsible sections ──
+    function toggleSection(titleEl) {
+      titleEl.classList.toggle('collapsed');
+      titleEl.nextElementSibling.classList.toggle('collapsed');
     }
 
     function renderPositions(positions) {
@@ -556,6 +703,372 @@ HTML_TEMPLATE = """
 
     refresh();
     setInterval(refresh, 2500);
+
+    // ════════════════════════════════════════════════════════════════
+    //  FASE 10 — Advanced Charts (refresh every 30 seconds)
+    // ════════════════════════════════════════════════════════════════
+
+    const CHART_COLORS = {
+      equity:    '#00d4aa',
+      drawdown:  'rgba(255,107,107,0.25)',
+      drawdownB: '#ff6b6b',
+      rollingWr: '#43c6ac',
+      refLow:    'rgba(255,107,107,0.55)',
+      refHigh:   'rgba(0,212,170,0.55)',
+      win:       '#00d4aa',
+      loss:      '#ff6b6b',
+      neutral:   '#8ea6bb',
+      yellow:    '#ffd93d',
+      gridLine:  'rgba(143,178,212,0.12)',
+      tickColor: '#8ea6bb',
+    };
+
+    const chartDefaults = {
+      responsive: true,
+      maintainAspectRatio: true,
+      plugins: { legend: { labels: { color: '#e8f1f8', font: { size: 12 } } } },
+    };
+
+    let _equityChart = null;
+    let _rollingWrChart = null;
+    let _symbolDistChart = null;
+    let _hourDistChart = null;
+
+    function _chartAxes(xTitle, yTitle) {
+      return {
+        x: {
+          grid: { color: CHART_COLORS.gridLine },
+          ticks: { color: CHART_COLORS.tickColor, maxTicksLimit: 10 },
+          title: xTitle ? { display: true, text: xTitle, color: CHART_COLORS.tickColor } : undefined,
+        },
+        y: {
+          grid: { color: CHART_COLORS.gridLine },
+          ticks: { color: CHART_COLORS.tickColor },
+          title: yTitle ? { display: true, text: yTitle, color: CHART_COLORS.tickColor } : undefined,
+        },
+      };
+    }
+
+    function _showEmpty(canvasId, message) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      const parent = canvas.parentElement;
+      canvas.style.display = 'none';
+      if (!parent.querySelector('.chart-empty')) {
+        const div = document.createElement('div');
+        div.className = 'chart-empty';
+        div.textContent = message || 'Sin datos suficientes';
+        parent.appendChild(div);
+      }
+    }
+
+    function _clearEmpty(canvasId) {
+      const canvas = document.getElementById(canvasId);
+      if (!canvas) return;
+      canvas.style.display = '';
+      const parent = canvas.parentElement;
+      const empty = parent.querySelector('.chart-empty');
+      if (empty) empty.remove();
+    }
+
+    async function renderEquityCurve() {
+      const canvasId = 'equityCurveChart';
+      let data;
+      try {
+        const r = await fetch('/api/equity_curve', { cache: 'no-store' });
+        data = await r.json();
+      } catch { return; }
+
+      if (!data || data.length < 2) {
+        _showEmpty(canvasId, 'Sin datos suficientes para la equity curve (mín. 2 trades)');
+        return;
+      }
+      _clearEmpty(canvasId);
+
+      const labels = data.map(d => '#' + d.trade_number);
+      const balances = data.map(d => d.balance);
+      const drawdowns = data.map(d => -d.drawdown_pct);
+
+      const cfg = {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Balance ($)',
+              data: balances,
+              borderColor: CHART_COLORS.equity,
+              backgroundColor: 'rgba(0,212,170,0.08)',
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              yAxisID: 'yBalance',
+              tension: 0.3,
+            },
+            {
+              label: 'Drawdown (%)',
+              data: drawdowns,
+              borderColor: CHART_COLORS.drawdownB,
+              backgroundColor: CHART_COLORS.drawdown,
+              borderWidth: 1,
+              pointRadius: 0,
+              fill: true,
+              yAxisID: 'yDD',
+              tension: 0.2,
+            },
+          ],
+        },
+        options: {
+          ...chartDefaults,
+          interaction: { mode: 'index', intersect: false },
+          plugins: { ...chartDefaults.plugins, tooltip: { mode: 'index', intersect: false } },
+          scales: {
+            x: { grid: { color: CHART_COLORS.gridLine }, ticks: { color: CHART_COLORS.tickColor, maxTicksLimit: 12 } },
+            yBalance: {
+              type: 'linear', position: 'left',
+              grid: { color: CHART_COLORS.gridLine },
+              ticks: { color: CHART_COLORS.tickColor },
+              title: { display: true, text: 'Balance ($)', color: CHART_COLORS.tickColor },
+            },
+            yDD: {
+              type: 'linear', position: 'right',
+              grid: { drawOnChartArea: false },
+              ticks: { color: CHART_COLORS.drawdownB },
+              title: { display: true, text: 'Drawdown (%)', color: CHART_COLORS.drawdownB },
+            },
+          },
+        },
+      };
+
+      if (_equityChart) { _equityChart.destroy(); }
+      _equityChart = new Chart(document.getElementById(canvasId), cfg);
+    }
+
+    async function renderRollingWR() {
+      const canvasId = 'rollingWrChart';
+      let data;
+      try {
+        const r = await fetch('/api/equity_curve', { cache: 'no-store' });
+        data = await r.json();
+      } catch { return; }
+
+      if (!data || data.length < 2) {
+        _showEmpty(canvasId, 'Sin datos suficientes para Rolling Win Rate (mín. 2 trades)');
+        return;
+      }
+      _clearEmpty(canvasId);
+
+      const labels = data.map(d => '#' + d.trade_number);
+      const rwrValues = data.map(d => d.rolling_wr);
+
+      const cfg = {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [
+            {
+              label: 'Rolling WR % ({{ rolling_wr_window }} trades)',
+              data: rwrValues,
+              borderColor: CHART_COLORS.rollingWr,
+              backgroundColor: 'rgba(67,198,172,0.1)',
+              borderWidth: 2,
+              pointRadius: 0,
+              fill: false,
+              tension: 0.3,
+            },
+            {
+              label: 'Ref. 55% (bueno)',
+              data: Array(labels.length).fill(55),
+              borderColor: CHART_COLORS.refHigh,
+              borderWidth: 1,
+              borderDash: [6, 4],
+              pointRadius: 0,
+              fill: false,
+            },
+            {
+              label: 'Ref. 45% (mínimo)',
+              data: Array(labels.length).fill(45),
+              borderColor: CHART_COLORS.refLow,
+              borderWidth: 1,
+              borderDash: [4, 4],
+              pointRadius: 0,
+              fill: false,
+            },
+          ],
+        },
+        options: {
+          ...chartDefaults,
+          interaction: { mode: 'index', intersect: false },
+          scales: {
+            ..._chartAxes('Trade #', 'Win Rate (%)'),
+            y: {
+              grid: { color: CHART_COLORS.gridLine },
+              ticks: { color: CHART_COLORS.tickColor, callback: v => v + '%' },
+              min: 0,
+              max: 100,
+            },
+          },
+        },
+      };
+
+      if (_rollingWrChart) { _rollingWrChart.destroy(); }
+      _rollingWrChart = new Chart(document.getElementById(canvasId), cfg);
+    }
+
+    async function renderSymbolDist() {
+      const canvasId = 'symbolDistChart';
+      let dist;
+      try {
+        const r = await fetch('/api/distribution', { cache: 'no-store' });
+        dist = await r.json();
+      } catch { return; }
+
+      const data = dist.by_symbol || [];
+      if (!data.length) {
+        _showEmpty(canvasId, 'Sin datos de distribución por símbolo');
+        return;
+      }
+      _clearEmpty(canvasId);
+
+      const labels = data.map(d => d.symbol);
+      const wrs = data.map(d => d.wr);
+      const colors = wrs.map(w => w >= 50 ? CHART_COLORS.win : CHART_COLORS.loss);
+
+      const cfg = {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Win Rate (%)',
+            data: wrs,
+            backgroundColor: colors,
+            borderRadius: 6,
+          }],
+        },
+        options: {
+          ...chartDefaults,
+          indexAxis: 'y',
+          plugins: {
+            ...chartDefaults.plugins,
+            legend: { display: false },
+            tooltip: { callbacks: { label: ctx => ' WR: ' + ctx.raw + '%' } },
+          },
+          scales: {
+            x: {
+              grid: { color: CHART_COLORS.gridLine },
+              ticks: { color: CHART_COLORS.tickColor, callback: v => v + '%' },
+              min: 0, max: 100,
+            },
+            y: { grid: { color: CHART_COLORS.gridLine }, ticks: { color: CHART_COLORS.tickColor } },
+          },
+        },
+      };
+
+      if (_symbolDistChart) { _symbolDistChart.destroy(); }
+      _symbolDistChart = new Chart(document.getElementById(canvasId), cfg);
+    }
+
+    async function renderHourDist() {
+      const canvasId = 'hourDistChart';
+      let dist;
+      try {
+        const r = await fetch('/api/distribution', { cache: 'no-store' });
+        dist = await r.json();
+      } catch { return; }
+
+      const data = dist.by_hour || [];
+      if (!data.length) {
+        _showEmpty(canvasId, 'Sin datos de distribución por hora');
+        return;
+      }
+      _clearEmpty(canvasId);
+
+      const labels = data.map(d => d.hour + 'h');
+      const totals = data.map(d => d.total);
+      const colors = data.map(d => d.wr >= 50 ? CHART_COLORS.win : CHART_COLORS.loss);
+
+      const cfg = {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Trades',
+            data: totals,
+            backgroundColor: colors,
+            borderRadius: 4,
+          }],
+        },
+        options: {
+          ...chartDefaults,
+          plugins: {
+            ...chartDefaults.plugins,
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (ctx) => {
+                  const d = data[ctx.dataIndex];
+                  return ` ${d.total} trades · WR ${d.wr}%`;
+                },
+              },
+            },
+          },
+          scales: _chartAxes('Hora UTC', 'Nº Trades'),
+        },
+      };
+
+      if (_hourDistChart) { _hourDistChart.destroy(); }
+      _hourDistChart = new Chart(document.getElementById(canvasId), cfg);
+    }
+
+    async function renderRecentTrades() {
+      let trades;
+      try {
+        const r = await fetch('/api/recent_trades', { cache: 'no-store' });
+        trades = await r.json();
+      } catch { return; }
+
+      const tbody = document.getElementById('recentTradesTable');
+      if (!trades || !trades.length) {
+        tbody.innerHTML = '<tr><td colspan="9" class="empty">Sin trades cerrados aún.</td></tr>';
+        return;
+      }
+
+      tbody.innerHTML = trades.map(t => {
+        const rowClass = t.result === 'WIN' ? 'row-win' : t.result === 'LOSS' ? 'row-loss' : 'row-be';
+        const resClass = t.result === 'WIN' ? 'result-win' : t.result === 'LOSS' ? 'result-loss' : 'result-be';
+        const profitColor = t.profit >= 0 ? 'profit pos' : 'profit neg';
+        const durStr = t.duration_min != null
+          ? (t.duration_min >= 60 ? Math.floor(t.duration_min / 60) + 'h ' + (t.duration_min % 60) + 'm' : t.duration_min + 'm')
+          : '—';
+        const pipsStr = t.pips != null ? t.pips.toFixed(1) : '—';
+        const badgeClass = t.direction === 'BUY' ? 'badge long' : 'badge short';
+        return `<tr class="${rowClass}">
+          <td class="mono">${t.num}</td>
+          <td>${t.symbol}</td>
+          <td><span class="${badgeClass}">${t.direction}</span></td>
+          <td class="mono">${t.open_price != null ? number.format(t.open_price) : '—'}</td>
+          <td class="mono">${t.close_price != null ? number.format(t.close_price) : '—'}</td>
+          <td class="mono ${profitColor}">${money.format(t.profit)}</td>
+          <td class="mono">${pipsStr}</td>
+          <td class="mono">${durStr}</td>
+          <td class="${resClass}">${t.result}</td>
+        </tr>`;
+      }).join('');
+    }
+
+    async function refreshCharts() {
+      await Promise.all([
+        renderEquityCurve(),
+        renderRollingWR(),
+        renderSymbolDist(),
+        renderHourDist(),
+        renderRecentTrades(),
+      ]);
+    }
+
+    // Initial chart render + periodic refresh (every 30 seconds)
+    refreshCharts();
+    setInterval(refreshCharts, {{ chart_refresh_ms }});
   </script>
 </body>
 </html>
@@ -567,7 +1080,11 @@ def create_app(status_provider):
 
     @app.get("/")
     def index():
-        return render_template_string(HTML_TEMPLATE)
+        return render_template_string(
+            HTML_TEMPLATE,
+            chart_refresh_ms=int(DASHBOARD_CHART_REFRESH_SEC * 1000),
+            rolling_wr_window=int(DASHBOARD_ROLLING_WR_WINDOW),
+        )
 
     @app.get("/api/status")
     def api_status():
@@ -577,6 +1094,24 @@ def create_app(status_provider):
         payload.setdefault("symbol_status", {})
         payload.setdefault("last_groq_analysis", {})
         return jsonify(payload)
+
+    @app.get("/api/equity_curve")
+    def api_equity_curve():
+        data = get_equity_curve_data(
+            initial_balance=DASHBOARD_EQUITY_INITIAL,
+            rolling_window=DASHBOARD_ROLLING_WR_WINDOW,
+        )
+        return jsonify(data)
+
+    @app.get("/api/distribution")
+    def api_distribution():
+        data = get_distribution_data()
+        return jsonify(data)
+
+    @app.get("/api/recent_trades")
+    def api_recent_trades():
+        data = get_recent_trades(limit=DASHBOARD_RECENT_TRADES_LIMIT)
+        return jsonify(data)
 
     return app
 
