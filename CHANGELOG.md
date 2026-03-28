@@ -4,7 +4,42 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
-## [2026-03-28 19:00 UTC] - FASE 9: Real Volume (Dukascopy) + COT Positioning (CFTC)
+## [2026-03-28 19:09 UTC] - FASE 10: Dashboard de Performance Avanzado
+
+### modules/web_dashboard.py
+- **Chart.js via CDN**: añadido `<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>` en el `<head>` — sin instalación ni requirements.txt.
+- **5 nuevas secciones visuales** añadidas al dashboard (colapsables con título clickeable):
+  1. **Equity Curve con Drawdown Overlay** — gráfico de línea dual (balance + área roja semitransparente de drawdown). Canvas `equityCurveChart`.
+  2. **Rolling Win Rate** — gráfico de línea con ventana deslizante de 20 trades y líneas de referencia en 45% (mínimo) y 55% (bueno). Canvas `rollingWrChart`.
+  3. **Distribución por Símbolo** — barras horizontales con WR por símbolo (verde ≥ 50%, rojo < 50%). Canvas `symbolDistChart`.
+  4. **Distribución por Hora UTC** — barras de número de trades por hora (0–23) coloreadas por WR. Canvas `hourDistChart`.
+  5. **Tabla de Trades Recientes** — últimos 50 trades con columnas: #, Símbolo, Dir, Entrada, Salida, Profit ($), Pips, Duración, Resultado. Coloreado: verde WIN, rojo LOSS, gris BE.
+- **3 nuevos endpoints API**:
+  - `GET /api/equity_curve` → lista `{trade_number, balance, drawdown_pct, rolling_wr, timestamp}` reconstruida desde SQLite.
+  - `GET /api/distribution` → `{by_symbol: [{symbol, wins, losses, total, wr}], by_hour: [{hour, wins, losses, total, wr}]}`.
+  - `GET /api/recent_trades` → últimos N trades cerrados con detalles completos.
+- **Refresh independiente**: los gráficos se actualizan cada 30 segundos (configurable via `DASHBOARD_CHART_REFRESH_SEC`), separado del polling de status (2.5 s).
+- **Graceful degradation**: si no hay datos en la DB, se muestra mensaje "Sin datos suficientes" con borde discontinuo en vez de gráfico vacío.
+- **CSS nuevo**: estilos para secciones colapsables, chart containers, tabla de trades coloreada, responsive para mobile.
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- **`get_equity_curve_data(initial_balance, rolling_window)`**: reconstruye la equity curve desde la tabla `trades` (ordenada por `closed_at`). Calcula `balance` acumulado, `drawdown_pct` (peak-to-trough), y `rolling_wr` (ventana deslizante). Retorna lista vacía si no hay trades.
+- **`get_distribution_data()`**: consulta `trades` con GROUP BY `symbol` y GROUP BY `strftime('%H', closed_at)`. Calcula WR (`wins/(wins+losses)`) para cada grupo. Retorna `{by_symbol, by_hour}`.
+- **`get_recent_trades(limit)`**: retorna los últimos N trades cerrados con todos los campos relevantes (ticket, symbol, direction, open_price, close_price, profit, pips, duration_min, result, timestamps).
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadido bloque **`FASE 10 — DASHBOARD AVANZADO`** con 4 parámetros:
+  - `DASHBOARD_EQUITY_INITIAL = 10000.0` — balance inicial para la equity curve.
+  - `DASHBOARD_ROLLING_WR_WINDOW = 20` — ventana para Rolling Win Rate.
+  - `DASHBOARD_RECENT_TRADES_LIMIT = 50` — últimos N trades en la tabla.
+  - `DASHBOARD_CHART_REFRESH_SEC = 30` — refresh de gráficos (más lento que el status).
+- **[Agente: GitHub Copilot]**
+
+---
+
+
 
 ### modules/real_volume.py *(nuevo)*
 - **Creado** módulo de volumen real para pares forex via Dukascopy HTTP feed (gratuito, sin API key).

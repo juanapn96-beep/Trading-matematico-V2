@@ -1582,6 +1582,150 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
         con.close()
 
 
+def get_equity_curve_data(initial_balance: float = 10000.0, rolling_window: int = 20) -> list:
+    """Retorna lista de dicts con trade_number, balance, drawdown_pct, rolling_wr, timestamp.
+
+    Reconstruye la equity curve sumando el profit de cada trade cerrado (ordenado
+    por closed_at).  Los trades sin closed_at se omiten para evitar distorsión.
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT id, profit, result, closed_at "
+            "FROM trades "
+            "WHERE result IS NOT NULL AND closed_at IS NOT NULL "
+            "ORDER BY closed_at ASC"
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+    if not rows:
+        return []
+
+    points = []
+    balance = initial_balance
+    peak = initial_balance
+    results_window: list = []  # últimos N resultados para rolling WR
+
+    for i, (trade_id, profit, result, closed_at) in enumerate(rows, start=1):
+        profit = float(profit or 0.0)
+        balance += profit
+        peak = max(peak, balance)
+        dd_pct = (peak - balance) / peak * 100 if peak > 0 else 0.0
+
+        # Only track WIN/LOSS in the window — BE trades don't count toward WR
+        if result in ("WIN", "LOSS"):
+            results_window.append(1 if result == "WIN" else 0)
+            if len(results_window) > rolling_window:
+                results_window.pop(0)
+        decidable = results_window  # already filtered to WIN/LOSS only
+        rolling_wr = (sum(decidable) / len(decidable) * 100) if decidable else 0.0
+
+        points.append({
+            "trade_number": i,
+            "balance": round(balance, 2),
+            "drawdown_pct": round(dd_pct, 2),
+            "rolling_wr": round(rolling_wr, 1),
+            "timestamp": closed_at,
+        })
+
+    return points
+
+
+def get_distribution_data() -> dict:
+    """Retorna {by_symbol: [...], by_hour: [...]} con WR y conteos.
+
+    by_symbol: [{symbol, wins, losses, total, wr}]
+    by_hour:   [{hour, wins, losses, total, wr}]
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    try:
+        sym_rows = cur.execute(
+            "SELECT symbol, "
+            "  SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END) AS wins, "
+            "  SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses, "
+            "  COUNT(*) AS total "
+            "FROM trades "
+            "WHERE result IS NOT NULL "
+            "GROUP BY symbol "
+            "ORDER BY total DESC"
+        ).fetchall()
+
+        hour_rows = cur.execute(
+            "SELECT CAST(strftime('%H', closed_at) AS INTEGER) AS hour, "
+            "  SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END) AS wins, "
+            "  SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END) AS losses, "
+            "  COUNT(*) AS total "
+            "FROM trades "
+            "WHERE result IS NOT NULL AND closed_at IS NOT NULL "
+            "GROUP BY hour "
+            "ORDER BY hour ASC"
+        ).fetchall()
+    except Exception:
+        return {"by_symbol": [], "by_hour": []}
+    finally:
+        con.close()
+
+    def _wr(wins, losses):
+        d = wins + losses
+        return round(wins / d * 100, 1) if d > 0 else 0.0
+
+    by_symbol = [
+        {"symbol": r[0], "wins": r[1], "losses": r[2], "total": r[3],
+         "wr": _wr(r[1], r[2])}
+        for r in sym_rows
+    ]
+    by_hour = [
+        {"hour": r[0], "wins": r[1], "losses": r[2], "total": r[3],
+         "wr": _wr(r[1], r[2])}
+        for r in hour_rows
+    ]
+    return {"by_symbol": by_symbol, "by_hour": by_hour}
+
+
+def get_recent_trades(limit: int = 50) -> list:
+    """Retorna los últimos N trades cerrados con detalles completos."""
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+    try:
+        rows = cur.execute(
+            "SELECT id, ticket, symbol, direction, open_price, close_price, "
+            "  profit, pips, duration_min, result, opened_at, closed_at "
+            "FROM trades "
+            "WHERE result IS NOT NULL "
+            "ORDER BY closed_at DESC "
+            "LIMIT ?",
+            (limit,),
+        ).fetchall()
+    except Exception:
+        return []
+    finally:
+        con.close()
+
+    trades = []
+    for i, r in enumerate(rows, start=1):
+        trades.append({
+            "num": i,
+            "id": r[0],
+            "ticket": r[1],
+            "symbol": r[2] or "",
+            "direction": r[3] or "",
+            "open_price": r[4],
+            "close_price": r[5],
+            "profit": round(float(r[6] or 0), 2),
+            "pips": round(float(r[7] or 0), 1) if r[7] is not None else None,
+            "duration_min": r[8],
+            "result": r[9] or "",
+            "opened_at": r[10] or "",
+            "closed_at": r[11] or "",
+        })
+    return trades
+
+
 def get_pending_trades() -> list:
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
