@@ -964,6 +964,13 @@ def build_context(
             sent_lines.append(
                 f"VIX: {sentiment['vix']:.2f} ({sentiment.get('vix_label', '?')})"
             )
+        if "cot_net_position" in sentiment:
+            cot_date = sentiment.get("cot_report_date", "")
+            date_str = f" ({cot_date})" if cot_date else ""
+            sent_lines.append(
+                f"COT Non-Commercial net: {sentiment['cot_net_position']:+,} "
+                f"→ {sentiment.get('cot_bias', '?')}{date_str}"
+            )
         sent_lines.append(f"Sesgo sentimiento: {sentiment.get('sentiment_bias', 'NEUTRAL')}")
         sent_lines.append("")
         lines += sent_lines

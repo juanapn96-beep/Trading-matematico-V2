@@ -4,6 +4,47 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-28 19:00 UTC] - FASE 9: Real Volume (Dukascopy) + COT Positioning (CFTC)
+
+### modules/real_volume.py *(nuevo)*
+- **Creado** módulo de volumen real para pares forex via Dukascopy HTTP feed (gratuito, sin API key).
+- **`SYMBOL_MAP`**: mapeo de símbolos Exness (con sufijo "m") a Dukascopy — EURUSDm, GBPUSDm, USDJPYm, EURJPYm, GBPJPYm. XAUUSDm, BTCUSDm, índices usan tick_volume (más preciso en esos activos).
+- **`_download_hour_ticks(duka_symbol, dt_utc)`**: descarga archivos `.bi5` (LZMA compressed, 20 bytes/tick) desde `https://datafeed.dukascopy.com/datafeed/{SYM}/{YYYY}/{MM}/{DD}/{HH}h_ticks.bi5`. Los meses son 0-based. Parsea struct `>IIIff` (ms_offset, ask, bid, ask_vol, bid_vol). Divisor 100000 para 5-digit pairs, 1000 para JPY pairs.
+- **`_aggregate_to_m5(ticks_df)`**: agrega ticks en candles de 5 minutos (OHLCV) con volumen real (ask_vol + bid_vol). Compatible con el formato esperado por `volume_profile()` en microstructure.py.
+- **`get_real_volume_profile(symbol, lookback_hours=4, cache_ttl_min=15)`**: función principal — descarga las últimas N horas de ticks y retorna DataFrame M5. Cache en memoria con TTL configurable. Retorna `None` (fallback silencioso) si el símbolo no está en SYMBOL_MAP o si Dukascopy no responde.
+- **`get_dukascopy_volume_for_period(symbol, start, end, cache_dir)`**: para backtester — descarga período histórico completo y lo guarda en CSV en `volume_cache/` para evitar re-descargas.
+- **[Agente: GitHub Copilot]**
+
+### modules/microstructure.py
+- **`volume_profile()`**: añadido parámetro opcional `real_volume_df: Optional[pd.DataFrame] = None`. Si se pasa, hace `merge_asof` por tiempo para sustituir tick_volume por volumen real donde hay match (tolerancia 10 min). Si falla, fallback silencioso a tick_volume.
+- **`compute_microstructure()`**: añadido parámetro opcional `real_volume_df` que se pasa a `volume_profile()`.
+- **[Agente: GitHub Copilot]**
+
+### modules/indicators.py
+- **`compute_all()`**: en el bloque de Microestructura (PILAR 3), intenta obtener volumen real de Dukascopy via `get_real_volume_profile(symbol)` y lo pasa a `compute_microstructure()`. Importación de `real_volume` con `try/except` para no romper si el módulo no está disponible. Respeta flags `REAL_VOLUME_ENABLED`, `REAL_VOLUME_LOOKBACK_HOURS`, `REAL_VOLUME_CACHE_TTL_MIN` de config. Añade campo `vol_source` ("real" / "tick") al dict de microestructura.
+- **[Agente: GitHub Copilot]**
+
+### modules/sentiment_data.py *(FASE 9 — COT añadido)*
+- **`get_cot_data()`**: descarga y parsea el reporte COT semanal de CFTC (`https://www.cftc.gov/dea/newcot/deafut.txt`). Archivo CSV de texto plano, gratuito, sin API key. Extrae posición neta Non-Commercial para: Euro FX, British Pound, Japanese Yen, Gold, Silver, Crude Oil, S&P 500, Bitcoin. Cache de 24 horas. Calcula `positioning_bias` (BULLISH/BEARISH/NEUTRAL) basado en % neto.
+- **`_get_cot_for_symbol(symbol)`**: selecciona el COT aplicable al símbolo Exness. Para pares cruzados (EURJPYm) retorna el COT con mayor |net|. Respeta flag `COT_ENABLED` de config.
+- **`SYMBOL_SENTIMENT_MAP`**: ampliado con fuente "cot" para todos los símbolos aplicables — EURUSDm, GBPUSDm, USDJPYm, EURJPYm, GBPJPYm, XAUUSDm, XAGUSDm, USOILm, US500m, BTCUSDm.
+- **`get_sentiment_for_symbol()`**: añade campos `cot_net_position`, `cot_bias`, `cot_change_pct`, `cot_report_date` al resultado. El sesgo general de sentimiento incluye COT cuando no hay otras fuentes primarias.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`build_context()`**: incluye datos COT en el prompt enviado a Groq — muestra `COT Non-Commercial net: +12,345 → BULLISH (2025-01-17)` cuando el campo `cot_net_position` está disponible en el dict de sentimiento.
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- Añadido bloque `FASE 9 — REAL VOLUME + COT POSITIONING` con variables: `REAL_VOLUME_ENABLED=True`, `REAL_VOLUME_LOOKBACK_HOURS=4`, `REAL_VOLUME_CACHE_TTL_MIN=15`, `COT_ENABLED=True`, `COT_CACHE_TTL_HOURS=24`.
+- **[Agente: GitHub Copilot]**
+
+### .gitignore
+- Añadido `volume_cache/` (CSVs históricos de volumen real generados en ejecución).
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28 18:32 UTC] - FASE 8: Backtesting Histórico Completo
 
 ### modules/backtester.py *(nuevo)*

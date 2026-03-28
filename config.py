@@ -669,9 +669,19 @@ MAX_PORTFOLIO_RISK_PCT    = 5.0
 # - se envía notificación Telegram con cooldown anti-spam
 
 # ================================================================
-#  CICLO PRINCIPAL
+#  FASE 9 — REAL VOLUME + COT POSITIONING
 # ================================================================
-LOOP_SLEEP_SEC = 60
+# Volumen real de Dukascopy para pares forex (mejora Volume Profile)
+REAL_VOLUME_ENABLED        = True   # False → siempre usar tick_volume
+REAL_VOLUME_LOOKBACK_HOURS = 4      # Horas de historial a descargar
+REAL_VOLUME_CACHE_TTL_MIN  = 15     # TTL del cache en memoria (minutos)
+
+# CFTC Commitment of Traders (COT) — posicionamiento institucional
+COT_ENABLED         = True    # False → no descargar COT
+# El reporte se actualiza semanalmente (viernes); 24 h de TTL permite
+# detectar cada nuevo reporte sin saturar el servidor de la CFTC.
+COT_CACHE_TTL_HOURS = 24      # TTL del cache en horas
+
 
 # ================================================================
 #  WEB DASHBOARD

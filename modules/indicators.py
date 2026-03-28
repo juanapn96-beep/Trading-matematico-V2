@@ -32,6 +32,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from modules.microstructure import compute_microstructure
+try:
+    from modules.real_volume import get_real_volume_profile
+    _REAL_VOLUME_AVAILABLE = True
+except ImportError:
+    _REAL_VOLUME_AVAILABLE = False
 
 log = logging.getLogger(__name__)
 
@@ -817,18 +822,41 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
             ctx["entry_candle_time"] = ""
 
         # ══════════════════════════════════════════════════════════
-        #  PILAR 3 — MICROESTRUCTURA (FASE 1)
+        #  PILAR 3 — MICROESTRUCTURA (FASE 1 + FASE 9: Real Volume)
         # ══════════════════════════════════════════════════════════
         try:
-            micro     = compute_microstructure(micro_df, price=float(micro_price_now))
+            # FASE 9: intentar volumen real de Dukascopy para pares forex
+            real_vol_df = None
+            if _REAL_VOLUME_AVAILABLE:
+                try:
+                    import config as cfg
+                    rv_enabled = getattr(cfg, "REAL_VOLUME_ENABLED", True)
+                    rv_hours   = getattr(cfg, "REAL_VOLUME_LOOKBACK_HOURS", 4)
+                    rv_ttl     = getattr(cfg, "REAL_VOLUME_CACHE_TTL_MIN", 15)
+                except Exception:
+                    rv_enabled, rv_hours, rv_ttl = True, 4, 15
+                if rv_enabled:
+                    real_vol_df = get_real_volume_profile(
+                        symbol,
+                        lookback_hours=rv_hours,
+                        cache_ttl_min=rv_ttl,
+                    )
+
+            micro     = compute_microstructure(
+                micro_df,
+                price=float(micro_price_now),
+                real_volume_df=real_vol_df,
+            )
             ctx["microstructure"] = micro.to_dict()
             ctx["microstructure"]["source_tf"] = "ENTRY" if micro_df is df_entry else "TREND"
+            ctx["microstructure"]["vol_source"] = "real" if real_vol_df is not None else "tick"
         except Exception as micro_err:
             log.debug(f"[indicators] Microstructure error en {symbol}: {micro_err}")
             ctx["microstructure"] = {
                 "micro_score": 0.0, "micro_bias": "NEUTRAL",
                 "description": "Error en cálculo",
                 "source_tf": "UNKNOWN",
+                "vol_source": "tick",
             }
 
         # ══════════════════════════════════════════════════════════
