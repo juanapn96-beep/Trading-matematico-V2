@@ -84,9 +84,9 @@ def get_adaptive_trail_params(sym_cfg: dict, direction: str) -> dict:
     }
 
 # ── Umbrales de activación del ensemble ─────────────────────────
-COSINE_ONLY_THRESHOLD = 20   # < 20 trades: solo coseno + régimen
-MLP_ACTIVATION        = 20   # ≥ 20 trades: activar MLP
-ENSEMBLE_ACTIVATION   = 50   # ≥ 50 trades: ensemble completo
+COSINE_ONLY_THRESHOLD = 50   # < 50 trades: solo coseno + régimen
+MLP_ACTIVATION        = 100  # ≥ 100 trades: activar MLP (mínimo estadístico razonable)
+ENSEMBLE_ACTIVATION   = 200  # ≥ 200 trades: ensemble completo
 
 # ── Arquitectura MLP ────────────────────────────────────────────
 # FASE 2: INPUT_DIM expandido de 32 → 40 (+8 features Pilar 3)

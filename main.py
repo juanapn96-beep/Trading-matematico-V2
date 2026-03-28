@@ -19,6 +19,7 @@
 import sys
 import time
 import json
+import math
 import threading
 import re
 import logging
@@ -67,6 +68,8 @@ from modules.telegram_notifier import (
 )
 from modules import dashboard
 from modules.web_dashboard import start_web_dashboard
+from modules.portfolio_risk import get_effective_portfolio_risk
+from modules.sentiment_data import get_sentiment_for_symbol
 
 # ── Logging ──────────────────────────────────────────────────────
 logging.basicConfig(
@@ -254,6 +257,75 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "should_pause": bool(getattr(news_ctx, "should_pause", False)),
         }
 
+    # Performance tracking — métricas globales de memoria neural
+    mem_stats = get_memory_stats()
+    perf_payload = {}
+    if mem_stats:
+        total = int(mem_stats.get("total", 0))
+        wins = int(mem_stats.get("wins", 0))
+        losses = int(mem_stats.get("losses", 0))
+        be_count = total - wins - losses
+        wr = float(mem_stats.get("win_rate", 0.0))
+        avg_win = float(mem_stats.get("avg_win", 0.0))
+        avg_loss = float(mem_stats.get("avg_loss", 0.0))
+        # Profit factor = ganancias_totales / pérdidas_totales
+        gross_wins  = avg_win  * wins   if wins   > 0 else 0.0
+        gross_losses = abs(avg_loss) * losses if losses > 0 else 0.0
+        pf = gross_wins / gross_losses if gross_losses > 0 else 0.0
+        best = float(mem_stats.get("best_trade", 0.0))
+        worst = float(mem_stats.get("worst_trade", 0.0))
+        perf_payload = {
+            "win_rate": wr,
+            "profit_factor": round(pf, 2),
+            "total_trades": total,
+            "wins": wins,
+            "losses": losses,
+            "breakeven": be_count,
+            "rolling_wr_20": round(wr, 1),
+            "max_drawdown_pct": round(float(mem_stats.get("max_drawdown_pct", 0.0)), 2),
+            "best_trade": round(best, 2),
+            "worst_trade": round(worst, 2),
+        }
+
+    # Portfolio risk snapshot
+    portfolio_payload = {}
+    bot_positions = [p for p in open_positions if getattr(p, "magic", 0) == getattr(cfg, "MAGIC_NUMBER", 0)]
+    if bot_positions:
+        positions_detail = []
+        for p in bot_positions:
+            positions_detail.append({
+                "symbol": getattr(p, "symbol", "?"),
+                "direction": "LONG" if getattr(p, "type", 0) == 0 else "SHORT",
+            })
+        # Calcular riesgo efectivo reutilizando el módulo portfolio_risk
+        from modules.portfolio_risk import _get_correlation
+        corr_count = 0
+        for i, p1 in enumerate(bot_positions):
+            for p2 in bot_positions[i + 1:]:
+                rho = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
+                if abs(rho) >= 0.60:
+                    corr_count += 1
+        # Riesgo efectivo del portafolio existente (sin trade propuesto adicional)
+        risk_per = getattr(cfg, "RISK_PER_TRADE", 0.01)
+        n = len(bot_positions)
+        risk_sq = risk_per ** 2
+        variance = n * risk_sq
+        for i, p1 in enumerate(bot_positions):
+            for j in range(i + 1, n):
+                p2 = bot_positions[j]
+                rho = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
+                same_dir = (getattr(p1, "type", 0) == getattr(p2, "type", 0))
+                sign = 1.0 if same_dir else -1.0
+                variance += 2 * rho * sign * risk_sq
+        eff_risk = math.sqrt(max(0.0, variance)) * 100
+        portfolio_payload = {
+            "open_positions": n,
+            "effective_risk_pct": round(eff_risk, 1),
+            "max_risk_pct": getattr(cfg, "MAX_PORTFOLIO_RISK_PCT", 5.0),
+            "correlated_pairs": corr_count,
+            "positions_detail": positions_detail,
+        }
+
     with state_lock:
         web_status_snapshot = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -264,11 +336,13 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "last_action": last_action,
             "active_trades": [_serialize_position_for_web(pos) for pos in open_positions],
             "symbol_status": dict(symbol_status_cache),
-            "memory": get_memory_stats(),
+            "memory": mem_stats,
             "news": news_payload,
             "shared_news_fetched_at": getattr(shared_news_cache, "fetched_at", "") if shared_news_cache is not None else "",
             "groq_metrics": _get_groq_metrics_snapshot_unlocked(),
             "last_groq_analysis": dict(last_groq_analysis),
+            "performance": perf_payload,
+            "portfolio_risk": portfolio_payload,
         }
 
 
@@ -876,6 +950,23 @@ def build_context(
         format_news_for_prompt(news_ctx),
         "",
     ]
+
+    # ── SENTIMIENTO DE MERCADO (fuentes externas) ────────────────
+    sentiment = get_sentiment_for_symbol(symbol)
+    if sentiment:
+        sent_lines = ["── SENTIMIENTO DE MERCADO ──"]
+        if "crypto_fng" in sentiment:
+            sent_lines.append(
+                f"Crypto Fear & Greed: {sentiment['crypto_fng']:.0f} "
+                f"({sentiment.get('crypto_fng_label', '?')})"
+            )
+        if "vix" in sentiment:
+            sent_lines.append(
+                f"VIX: {sentiment['vix']:.2f} ({sentiment.get('vix_label', '?')})"
+            )
+        sent_lines.append(f"Sesgo sentimiento: {sentiment.get('sentiment_bias', 'NEUTRAL')}")
+        sent_lines.append("")
+        lines += sent_lines
 
     # ── PILAR 3: MICROESTRUCTURA ─────────────────────────────────
     micro = ind.get("microstructure", {})
@@ -2016,6 +2107,24 @@ def _execute_decision(
     if not is_rr_valid(price, sl, tp):
         last_action = f"R:R inválido {symbol} ({rr:.2f})"
         _set_symbol_status(symbol, f"⚖️ R:R inválido ({rr:.2f})")
+        return
+
+    # ── FASE 7: Portfolio Risk — correlación entre activos ───────
+    # Calcula riesgo efectivo del portafolio incluyendo el trade propuesto.
+    # Bloquea si la exposición correlacionada supera el umbral.
+    all_positions = mt5.positions_get()
+    if all_positions is None:
+        all_positions = []
+    portfolio_risk_pct, risk_blocked, risk_reason = get_effective_portfolio_risk(
+        open_positions=all_positions,
+        new_symbol=symbol,
+        new_direction=action,
+    )
+    if risk_blocked:
+        msg = f"🔗 Riesgo portafolio {portfolio_risk_pct:.1f}%"
+        last_action = f"{msg} {symbol}"
+        _set_symbol_status(symbol, msg[:48])
+        log.info(f"[{symbol}] {risk_reason}")
         return
 
     sym_info = mt5.symbol_info(symbol)

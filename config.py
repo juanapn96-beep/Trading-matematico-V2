@@ -602,8 +602,9 @@ KELLY_FRACTION    = 0.25   # 25% del Kelly óptimo (cuarto de Kelly = conservado
                             # 0.0 = desactivar Kelly (usar always fixed risk)
                             # 0.50 = half Kelly (más agresivo)
                             # 0.25 = quarter Kelly (recomendado, resiste errores de estimación)
-KELLY_MIN_TRADES  = 30     # Mínimo de trades históricos (por símbolo) para activar Kelly
-                            # Con menos trades, el Kelly se basa en estadística insuficiente
+KELLY_MIN_TRADES  = 100    # Mínimo de trades históricos (por símbolo) para activar Kelly
+                            # Con menos trades, el intervalo de confianza del win_rate
+                            # es demasiado amplio para que Kelly sea confiable
 
 # Multiplicador del umbral duro de confluencia (pre-Groq + post-Groq gate).
 # Umbral efectivo = CONFLUENCE_MIN_SCORE × CONFLUENCE_HARD_GATE_MULT
@@ -648,6 +649,15 @@ POLICY_MIN_CONF_BONUS     = 1
 # porcentaje del balance actual. No afecta la gestión de posiciones
 # ya abiertas (trailing/SL/TP siguen activos).
 EQUITY_GUARD_MIN_PCT      = 70.0
+
+# ================================================================
+#  FASE 7 — PORTFOLIO RISK (CORRELACIÓN ENTRE ACTIVOS)
+# ================================================================
+# Riesgo máximo efectivo del portafolio (% del balance) considerando
+# la correlación entre posiciones abiertas.
+# Con RISK_PER_TRADE=1%, 5% limita ~5 posiciones no correlacionadas
+# o ~3 posiciones altamente correlacionadas.
+MAX_PORTFOLIO_RISK_PCT    = 5.0
 
 # ================================================================
 #  FASE 6 — DAILY LOSS GUARD (PROTECCIÓN INTRADÍA GLOBAL)

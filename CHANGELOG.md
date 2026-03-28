@@ -4,6 +4,71 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-03-28 17:00 UTC] - FASE 7: Integración de correcciones críticas + nuevos módulos
+
+### modules/indicators.py
+- **FIX CRÍTICO — Hilbert Transform phase calculation**: Reemplazado el cálculo incorrecto
+  `phase_deg = np.degrees(phase_rad) * len(closes) % 360` con el algoritmo correcto de
+  acumulación de DeltaPhase de Ehlers (`dc_phase[i] = dc_phase[i-1] + 360/smo_per[i]`).
+  Esto corrige las señales LOCAL_MAX y LOCAL_MIN que estaban basadas en fases incorrectas.
+- **FIX — Hurst exponent stability**: Incrementado max_lag de 15-30 a 40-100 (adaptativo
+  por ATR%), y el default automático usa `min(len(prices)//4, 100)` como recomienda la
+  literatura académica. Reduce la varianza del estimador significativamente.
+- **FIX — FFT detrending**: Reemplazada la sustracción lineal
+  `prices - np.linspace(...)` con diferenciación logarítmica de primer orden
+  (`np.diff(np.log(prices))`), que produce una serie más estacionaria y elimina
+  tendencias cuadráticas y superiores.
+- **[Agente: GitHub Copilot]**
+
+### modules/neural_brain.py
+- **FIX — Activation thresholds**: Incrementados umbrales para evitar overfitting:
+  - `COSINE_ONLY_THRESHOLD`: 20 → 50
+  - `MLP_ACTIVATION`: 20 → 100 (mínimo estadístico razonable para 40 features)
+  - `ENSEMBLE_ACTIVATION`: 50 → 200
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- **FIX — Kelly min trades**: `KELLY_MIN_TRADES`: 30 → 100 para intervalo de confianza
+  más estrecho en la estimación de win_rate.
+- **NUEVO — `MAX_PORTFOLIO_RISK_PCT`**: 5.0% — umbral máximo de riesgo efectivo del
+  portafolio considerando correlaciones entre activos.
+- **[Agente: GitHub Copilot]**
+
+### modules/portfolio_risk.py (NUEVO)
+- Módulo de gestión de correlación entre activos.
+- Matriz estática de correlaciones históricas entre los 12 símbolos.
+- `get_effective_portfolio_risk()`: calcula riesgo efectivo del portafolio usando varianza
+  ponderada por correlación y dirección de las posiciones.
+- Bloquea nuevos trades cuando la exposición correlacionada supera `MAX_PORTFOLIO_RISK_PCT`.
+- **[Agente: GitHub Copilot]**
+
+### modules/sentiment_data.py (NUEVO)
+- Integración de datos de sentimiento de mercado de fuentes gratuitas:
+  - Crypto Fear & Greed Index (BTCUSDm) — api.alternative.me
+  - CBOE VIX (US500m, NAS100m, GER40m, XAUUSDm, etc.) — cdn.cboe.com
+- Cache con TTL de 15 minutos para respetar rate-limits.
+- `get_sentiment_for_symbol()`: retorna datos de sentimiento relevantes + sesgo general.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- Integrado `portfolio_risk.get_effective_portfolio_risk()` en `_execute_decision()`:
+  bloquea órdenes si el riesgo efectivo del portafolio supera el umbral.
+- Integrado `sentiment_data.get_sentiment_for_symbol()` en `build_context()`:
+  Groq recibe datos de Fear & Greed y VIX como contexto adicional.
+- Extendido `_update_web_status_snapshot()` con métricas de performance (win rate,
+  profit factor, rolling WR, best/worst trade) y riesgo de portafolio en tiempo real.
+- **[Agente: GitHub Copilot]**
+
+### modules/web_dashboard.py
+- Añadidas 2 secciones al dashboard:
+  - **📊 Performance Tracking**: Win rate, profit factor, total trades, rolling WR,
+    max drawdown, best/worst trade.
+  - **🔗 Riesgo de Portafolio**: Posiciones activas, riesgo efectivo %,
+    máximo permitido, pares correlacionados.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-26 19:10 UTC] - FASE 1/2: Trailing proporcional v6.9 + Web Dashboard asíncrono
 
 ### main.py

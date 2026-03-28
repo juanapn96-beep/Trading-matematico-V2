@@ -390,8 +390,20 @@ def hilbert_transform(close: pd.Series, min_period: int = 6, max_period: int = 5
         smo_per[i] = 0.2*per[i] + 0.8*(smo_per[i-1] if i > 0 else per[i])
 
     dom_period    = float(np.clip(smo_per[-1], min_period, max_period))
-    phase_rad     = 2 * np.pi / dom_period
-    phase_deg     = np.degrees(phase_rad) * len(closes) % 360
+
+    # Acumulación de DeltaPhase (algoritmo correcto de Ehlers)
+    # En lugar de calcular la fase como np.degrees(2π/period)*n % 360,
+    # se acumula 360/smo_per[i] barra por barra hasta obtener la posición
+    # real dentro del ciclo dominante.
+    dc_phase = np.zeros(n)
+    for i in range(1, n):
+        if smo_per[i] > 0:
+            dc_phase[i] = dc_phase[i - 1] + (360.0 / smo_per[i])
+        else:
+            dc_phase[i] = dc_phase[i - 1]
+        dc_phase[i] = dc_phase[i] % 360
+
+    phase_deg     = float(dc_phase[-1])
     sine_val      = float(np.sin(np.radians(phase_deg)))
     lead_sine_val = float(np.sin(np.radians(phase_deg + 45)))
     in_phase_val  = float(I[-1])
@@ -430,9 +442,17 @@ def hilbert_transform(close: pd.Series, min_period: int = 6, max_period: int = 5
     )
 
 
-def hurst_exponent(close: pd.Series, min_lag: int = 2, max_lag: int = 20) -> float:
-    """Exponente de Hurst — H>0.6=tendencia, H≈0.5=aleatorio, H<0.4=reversión."""
+def hurst_exponent(close: pd.Series, min_lag: int = 2, max_lag: int = None) -> float:
+    """Exponente de Hurst — H>0.6=tendencia, H≈0.5=aleatorio, H<0.4=reversión.
+
+    max_lag se calcula automáticamente como min(len(prices)//4, 100) para
+    obtener una estimación estadísticamente estable.  El caller puede pasar
+    max_lag explícito para mantener compatibilidad con la adaptación por ATR%.
+    """
     prices = close.dropna().values.astype(float)
+    if max_lag is None:
+        max_lag = min(len(prices) // 4, 100)
+    max_lag = max(min_lag + 2, min(max_lag, len(prices) // 4))
     if len(prices) < max_lag * 2:
         return 0.5
     lags = range(min_lag, max_lag)
@@ -459,11 +479,20 @@ def kalman_filter(close: pd.Series, R: float = 0.01, Q: float = 0.0001):
 
 
 def fourier_dominant_cycle(close: pd.Series, top_n: int = 3) -> dict:
-    """FFT para detectar el período dominante del mercado."""
+    """FFT para detectar el período dominante del mercado.
+
+    Detrending mejorado: se usa diferenciación logarítmica de primer orden
+    (log-returns) que produce una serie más estacionaria que la sustracción
+    lineal anterior, eliminando tendencias cuadráticas y superiores.
+    """
     prices = close.dropna().values.astype(float)
     if len(prices) < 32:
         return {"dominant_period": 20, "cycles": [], "strength": 0.0}
-    detrended = prices - np.linspace(prices[0], prices[-1], len(prices))
+    # Diferenciación logarítmica: transforma en retornos ≈ estacionarios
+    log_prices = np.log(np.maximum(prices, 1e-10))
+    detrended  = np.diff(log_prices)
+    if len(detrended) < 16:
+        return {"dominant_period": 20, "cycles": [], "strength": 0.0}
     fft_vals  = np.fft.rfft(detrended)
     freqs     = np.fft.rfftfreq(len(detrended))
     amps      = np.abs(fft_vals)
@@ -664,7 +693,9 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         }
 
         # Hurst: ventana max_lag adaptativa a la volatilidad
-        hurst_max_lag = 15 if atr_pct_now > 0.8 else (20 if atr_pct_now > 0.4 else 30)
+        # MEJORA: lags elevados (hasta N/4 o 100) para estimación estable.
+        # La adaptación por ATR% escala el techo: volátil → más rápido, tranquilo → más lags.
+        hurst_max_lag = 40 if atr_pct_now > 0.8 else (60 if atr_pct_now > 0.4 else 100)
         h_exp = hurst_exponent(close, min_lag=2, max_lag=hurst_max_lag)
         ctx["hurst"] = round(h_exp, 3)
         ctx["hurst_regime"] = (
