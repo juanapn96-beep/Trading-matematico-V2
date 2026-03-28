@@ -334,6 +334,18 @@ HTML_TEMPLATE = """
         <div id="memoryNews" class="status-list"></div>
       </section>
     </section>
+
+    <section class="grid">
+      <section class="panel">
+        <h2>📊 Performance Tracking</h2>
+        <div id="performanceMetrics" class="status-list"></div>
+      </section>
+
+      <section class="panel">
+        <h2>🔗 Riesgo de Portafolio</h2>
+        <div id="portfolioRisk" class="status-list"></div>
+      </section>
+    </section>
   </main>
 
   <script>
@@ -466,6 +478,61 @@ HTML_TEMPLATE = """
       container.innerHTML = memoryBlock + newsBlock;
     }
 
+    function renderPerformance(perf) {
+      const container = document.getElementById('performanceMetrics');
+      if (!perf || Object.keys(perf).length === 0) {
+        container.innerHTML = '<div class="empty">Sin datos de performance aún.</div>';
+        return;
+      }
+
+      const labels = [
+        ['Win Rate (real)', (perf.win_rate || 0).toFixed(1) + '%'],
+        ['Profit Factor', (perf.profit_factor || 0).toFixed(2)],
+        ['Total trades', perf.total_trades || 0],
+        ['Wins / Losses', `${perf.wins || 0} / ${perf.losses || 0}`],
+        ['Breakeven', perf.breakeven || 0],
+        ['Rolling WR (20)', (perf.rolling_wr_20 || 0).toFixed(1) + '%'],
+        ['Max Drawdown', (perf.max_drawdown_pct || 0).toFixed(2) + '%'],
+        ['Mejor trade', '$' + (perf.best_trade || 0).toFixed(2)],
+        ['Peor trade', '$' + (perf.worst_trade || 0).toFixed(2)],
+      ];
+
+      container.innerHTML = labels.map(([label, value]) => `
+        <div class="status-item">
+          <strong>${label}</strong>
+          <div class="mono">${value}</div>
+        </div>
+      `).join('');
+    }
+
+    function renderPortfolioRisk(risk) {
+      const container = document.getElementById('portfolioRisk');
+      if (!risk || Object.keys(risk).length === 0) {
+        container.innerHTML = '<div class="empty">Sin datos de portafolio.</div>';
+        return;
+      }
+
+      const items = [
+        ['Posiciones activas', risk.open_positions || 0],
+        ['Riesgo efectivo', (risk.effective_risk_pct || 0).toFixed(1) + '%'],
+        ['Máximo permitido', (risk.max_risk_pct || 5).toFixed(1) + '%'],
+        ['Activos correlacionados', risk.correlated_pairs || 0],
+      ];
+
+      if (risk.positions_detail && risk.positions_detail.length) {
+        risk.positions_detail.forEach(pos => {
+          items.push([pos.symbol, pos.direction]);
+        });
+      }
+
+      container.innerHTML = items.map(([label, value]) => `
+        <div class="status-item">
+          <strong>${label}</strong>
+          <div class="mono">${value}</div>
+        </div>
+      `).join('');
+    }
+
     async function refresh() {
       try {
         const response = await fetch('/api/status', { cache: 'no-store' });
@@ -480,6 +547,8 @@ HTML_TEMPLATE = """
         renderStatus(payload.symbol_status || {});
         renderLastAction(payload);
         renderMemoryNews(payload);
+        renderPerformance(payload.performance || {});
+        renderPortfolioRisk(payload.portfolio_risk || {});
       } catch (error) {
         document.getElementById('lastAction').innerHTML = `<div class="empty">Error actualizando dashboard: ${error}</div>`;
       }
