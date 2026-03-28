@@ -10,6 +10,7 @@
 ║     python run_backtest.py --all --start 2023-01-01 --export    ║
 ║     python run_backtest.py --symbol EURUSDm --walk-forward      ║
 ║     python run_backtest.py --symbol XAUUSDm --csv-input data.csv║
+║     python run_backtest.py --symbol EURUSDm --truefx            ║
 ║                                                                  ║
 ║   Benchmarks mínimos aceptables:                                 ║
 ║   • Win Rate        >= 45%                                       ║
@@ -119,6 +120,11 @@ def _parse_args() -> argparse.Namespace:
         metavar="FILE",
         help="Cargar datos desde CSV en lugar de MT5 (modo offline)",
     )
+    parser.add_argument(
+        "--truefx",
+        action="store_true",
+        help="Cargar datos de data/truefx/ (tick data TrueFX) en vez de MT5",
+    )
 
     # Exportación
     parser.add_argument(
@@ -169,7 +175,17 @@ def _run_single(
         ok = bt.load_data_csv(args.csv_input)
         if not ok:
             log.error(f"No se pudo cargar CSV: {args.csv_input}")
-            return
+            return None
+    elif args.truefx:
+        log.info(f"   Fuente: TrueFX (data/truefx/)")
+        ok = bt.load_data_truefx(symbol, args.start, args.end)
+        if not ok:
+            log.error(
+                f"No se pudo cargar datos TrueFX para {symbol}. "
+                "Verifica que existan archivos en data/truefx/ "
+                f"(e.g. {symbol.rstrip('m')}-YYYY-MM.csv)"
+            )
+            return None
     else:
         try:
             import MetaTrader5 as mt5  # type: ignore

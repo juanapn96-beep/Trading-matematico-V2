@@ -734,6 +734,25 @@ BACKTEST_WALK_FORWARD_STEP_MONTHS  = 1   # Avance por iteración
 
 
 # ================================================================
+#  FASE 11 — EXTERNAL DATA PROVIDERS
+# ================================================================
+# Twelve Data (gratuito: 800 calls/día, 8 calls/min)
+TWELVE_DATA_KEY              = os.environ.get("TWELVE_DATA_KEY", "")
+TWELVE_DATA_ENABLED          = bool(TWELVE_DATA_KEY)
+TWELVE_DATA_CACHE_TTL_MIN    = 5
+TWELVE_DATA_MAX_CALLS_PER_MIN = 8
+
+# Polygon.io (gratuito: 5 req/min)
+POLYGON_KEY                  = os.environ.get("POLYGON_KEY", "")
+POLYGON_ENABLED              = bool(POLYGON_KEY)
+POLYGON_CACHE_TTL_MIN        = 5
+POLYGON_MAX_CALLS_PER_MIN    = 5
+
+# TrueFX (datos locales, sin API)
+TRUEFX_DATA_DIR              = os.path.join(os.path.dirname(__file__), "data", "truefx")
+TRUEFX_ENABLED               = os.path.isdir(TRUEFX_DATA_DIR)
+
+# ================================================================
 #  FASE 12 — ADF STATIONARITY + Z-SCORE FILTER
 # ================================================================
 ADF_ENABLED              = True    # Activar test ADF como complemento de Hurst

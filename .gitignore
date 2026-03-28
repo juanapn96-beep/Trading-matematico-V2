@@ -49,3 +49,6 @@ backtest_results/
 
 # FASE 9 — Caché de volumen real de Dukascopy (CSVs históricos)
 volume_cache/
+
+# FASE 11 — TrueFX tick data (archivos >25MB, solo locales)
+data/truefx/
