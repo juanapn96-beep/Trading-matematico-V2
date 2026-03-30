@@ -274,13 +274,21 @@ def calc_sl_tp(
     atr: float,
     sym_cfg: dict,
 ) -> Tuple[float, float]:
-    """SL y TP basados en ATR — dinámicos según volatilidad actual."""
+    """SL y TP basados en ATR — dinámicos según volatilidad actual.
+
+    Soporta TP asimétrico por dirección:
+      - tp_atr_mult_buy  → TP largo para operaciones BUY  (ej: 4.0)
+      - tp_atr_mult_sell → TP corto para operaciones SELL (ej: 2.4)
+    Si no están definidos, usa tp_atr_mult como fallback (compatible hacia atrás).
+    """
     sl_mult = sym_cfg.get("sl_atr_mult", 2.0)
-    tp_mult = sym_cfg.get("tp_atr_mult", 4.0)
+
     if direction == "BUY":
+        tp_mult = sym_cfg.get("tp_atr_mult_buy", sym_cfg.get("tp_atr_mult", 4.0))
         sl = round(price - sl_mult * atr, 5)
         tp = round(price + tp_mult * atr, 5)
     else:
+        tp_mult = sym_cfg.get("tp_atr_mult_sell", sym_cfg.get("tp_atr_mult", 2.0))
         sl = round(price + sl_mult * atr, 5)
         tp = round(price - tp_mult * atr, 5)
     return sl, tp
