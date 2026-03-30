@@ -539,6 +539,17 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
 #  MT5 — CONEXIÓN Y DATOS
 # ════════════════════════════════════════════════════════════════
 
+# Número de reintentos y espera (segundos) cuando copy_rates_from_pos devuelve None.
+# MT5 descarga el historial de forma asíncrona tras symbol_select, por lo que el
+# primer intento puede fallar aunque el símbolo exista.
+_GET_CANDLES_RETRIES = 3
+_GET_CANDLES_RETRY_WAIT = 0.5
+
+# Espera (segundos) después de pre-seleccionar símbolos en conectar_mt5().
+# Da tiempo a MT5 para iniciar la descarga asíncrona de historial.
+_SYMBOL_WARMUP_WAIT_SEC = 2
+
+
 def conectar_mt5() -> bool:
     if not mt5.initialize():
         log.error("[MT5] initialize() falló"); return False
@@ -547,13 +558,32 @@ def conectar_mt5() -> bool:
         log.error(f"[MT5] login falló: {mt5.last_error()}"); return False
     info = mt5.account_info()
     log.info(f"[MT5] Conectado — Balance: ${info.balance:,.2f} | Server: {cfg.MT5_SERVER}")
+    # Pre-seleccionar todos los símbolos configurados para disparar la descarga
+    # de historial en MT5 (asíncrona). Esto evita "Datos insuficientes" en el
+    # primer ciclo cuando el símbolo no está en el Market Watch.
+    log.info("[MT5] Pre-seleccionando símbolos para cargar historial...")
+    for sym in cfg.SYMBOLS:
+        if not mt5.symbol_select(sym, True):
+            log.warning(f"[MT5] symbol_select falló al iniciar para {sym} — verifica el nombre en el broker")
+    # Pequeña espera para que MT5 inicie la descarga de historial de todos los símbolos
+    time.sleep(_SYMBOL_WARMUP_WAIT_SEC)
+    log.info("[MT5] Pre-selección de símbolos completada.")
     return True
 
 
 def get_candles(symbol: str, tf: str, n: int = 200) -> Optional[pd.DataFrame]:
     if not mt5.symbol_select(symbol, True):
+        # symbol_select puede fallar por razones transitorias (mercado cerrado para ese símbolo,
+        # etc.); copy_rates_from_pos puede devolver datos igualmente si el historial está en
+        # caché local, por eso se continúa y se deja que el retry decida.
         log.debug(f"[MT5] symbol_select falló para {symbol}")
-    rates = mt5.copy_rates_from_pos(symbol, TF_MAP[tf], 0, n)
+    rates = None
+    for attempt in range(_GET_CANDLES_RETRIES):
+        rates = mt5.copy_rates_from_pos(symbol, TF_MAP[tf], 0, n)
+        if rates is not None and len(rates) > 0:
+            break
+        if attempt < _GET_CANDLES_RETRIES - 1:
+            time.sleep(_GET_CANDLES_RETRY_WAIT)
     if rates is None or len(rates) == 0:
         return None
     df = pd.DataFrame(rates)
