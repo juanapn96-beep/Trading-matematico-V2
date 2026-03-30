@@ -13,6 +13,7 @@ __pycache__/
 
 # Base de datos de memoria del bot
 *.db
+memory/
 memory/*.db
 
 # Archivos de log

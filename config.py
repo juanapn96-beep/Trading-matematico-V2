@@ -1,6 +1,14 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — config.py  (v6.6 — MEMORY WARMUP FIX)        ║
+║   ZAR ULTIMATE BOT v6 — config.py  (v6.7 — IC MARKETS MIGRATION)     ║
+║                                                                          ║
+║   CAMBIOS v6.7:                                                         ║
+║   • Servidor MT5 cambiado a ICMarketsSC-MT5-2 (default)               ║
+║   • ALPHA_VANTAGE_KEY y FINNHUB_KEY ahora opcionales (no bloquean)    ║
+║   • US30 añadido a _NO_SUFFIX (índice sin sufijo de broker)            ║
+║   • 8 nuevos símbolos TIER 1 IC Markets (13-20):                      ║
+║     AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, AUDJPY, ETHUSD, US30    ║
+║   • Total: 12 → 20 activos                                             ║
 ║                                                                          ║
 ║   CAMBIOS v6.6:                                                         ║
 ║   • FIX CRÍTICO: Warmup ya no bloquea RANGING/MIXED/VOLATILE          ║
@@ -47,7 +55,7 @@ def _require_env(name: str) -> str:
 # ================================================================
 MT5_LOGIN    = int(_require_env("MT5_LOGIN"))
 MT5_PASSWORD = _require_env("MT5_PASSWORD")
-MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
+MT5_SERVER   = os.environ.get("MT5_SERVER", "ICMarketsSC-MT5-2")
 
 # Sufijo de símbolo del broker.  Exness usa "m" (XAUUSDm, EURUSDm…).
 # IC Markets usa "" vacío (XAUUSD, EURUSD…).  Cambia en el .env para migrar.
@@ -55,7 +63,7 @@ MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
 BROKER_SUFFIX = os.environ.get("BROKER_SUFFIX", "")
 
 # Símbolos que NO llevan el sufijo en ningún broker (por convención del feed).
-_NO_SUFFIX = {"USTEC", "DE40"}
+_NO_SUFFIX = {"USTEC", "DE40", "US30"}
 
 # ================================================================
 #  GROQ
@@ -74,8 +82,8 @@ TELEGRAM_CHAT_ID = _require_env("TELEGRAM_CHAT_ID")
 # ================================================================
 #  APIs EXTERNAS
 # ================================================================
-ALPHA_VANTAGE_KEY = _require_env("ALPHA_VANTAGE_KEY")
-FINNHUB_KEY       = _require_env("FINNHUB_KEY")
+ALPHA_VANTAGE_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
+FINNHUB_KEY       = os.environ.get("FINNHUB_KEY", "")
 
 
 def _sym(base: str) -> str:
@@ -86,7 +94,7 @@ def _sym(base: str) -> str:
 
 
 # ================================================================
-#  SÍMBOLOS — 12 ACTIVOS, SESIONES EXPANDIDAS 24/5
+#  SÍMBOLOS — 20 ACTIVOS, SESIONES EXPANDIDAS 24/5
 # ================================================================
 SYMBOLS = {
 
@@ -533,6 +541,294 @@ SYMBOLS = {
         "memory_block_threshold": 0.85,
         "memory_warn_threshold":  0.75,
         "memory_decay_days":      20,
+    },
+
+    # ── TIER 1 IC Markets — alta liquidez, spreads bajos ────────
+
+    # ── 13. AUD/USD — 24/5 ─────────────────────────────────────
+    _sym("AUDUSD"): {
+        "name":           "Dólar Australiano / Dólar (Aussie)",
+        "currencies":     ["AUD", "USD"],
+        "strategy_type":  "COMMODITY_PROXY",
+        "strategy_extra_rules": (
+            "ESTRATEGIA COMMODITY_PROXY — AUDUSD / Aussie (AUDUSD):\n"
+            "- Opera 24h. Sesión asiática (00-09 UTC) es la de mayor actividad para AUD.\n"
+            "- Altamente correlacionado con metales y commodities (oro, cobre).\n"
+            "- En risk-ON global sube; en risk-OFF baja junto con AUDJPY.\n"
+            "- Hurst 0.40-0.55 indica tendencia fiable. Por debajo → reversión desde S/R.\n"
+            "- RBA y datos chinos pueden dar movimientos bruscos en sesión asiática."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.6,
+        "tp_atr_mult":    3.2,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0010,
+        "price_scale":    0.65,
+        "news_topics":    "economy_monetary,forex,economy_macro,commodities",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 14. USD/CAD — 24/5 ─────────────────────────────────────
+    _sym("USDCAD"): {
+        "name":           "Dólar / Dólar Canadiense (Loonie)",
+        "currencies":     ["USD", "CAD"],
+        "strategy_type":  "OIL_PROXY_TREND",
+        "strategy_extra_rules": (
+            "ESTRATEGIA OIL_PROXY_TREND — USDCAD / Loonie (USDCAD):\n"
+            "- Opera 24h. Mayor actividad en sesión americana (13-21 UTC).\n"
+            "- Correlación inversa con el petróleo WTI (XTIUSD): si sube el crudo → USDCAD baja.\n"
+            "- Vigilar inventarios EIA (miércoles) y datos del Banco de Canadá.\n"
+            "- Kalman slope + MACD histograma son las señales primarias.\n"
+            "- BOC y NFP canadiense: el calendario pausará automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.6,
+        "tp_atr_mult":    3.2,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.42,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0012,
+        "price_scale":    1.36,
+        "news_topics":    "economy_monetary,forex,economy_macro,energy",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 15. USD/CHF — 24/5 ─────────────────────────────────────
+    _sym("USDCHF"): {
+        "name":           "Dólar / Franco Suizo (Swissy)",
+        "currencies":     ["USD", "CHF"],
+        "strategy_type":  "SAFE_HAVEN_CYCLE",
+        "strategy_extra_rules": (
+            "ESTRATEGIA SAFE_HAVEN_CYCLE — USDCHF / Swissy (USDCHF):\n"
+            "- Opera 24h. Alta actividad en sesión europea (07-17 UTC).\n"
+            "- Correlación inversa con el oro (XAUUSD): risk-OFF → USDCHF baja + oro sube.\n"
+            "- CHF es activo de refugio: en crisis globales el franco se aprecia fuertemente.\n"
+            "- SNB (Banco Nacional Suizo) interviene esporádicamente — gran riesgo de noticia.\n"
+            "- Ciclos Hilbert muy limpios durante sesión europea."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.5,
+        "tp_atr_mult":    3.0,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0010,
+        "price_scale":    0.90,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 16. NZD/USD — 24/5 ─────────────────────────────────────
+    _sym("NZDUSD"): {
+        "name":           "Dólar Neozelandés / Dólar (Kiwi)",
+        "currencies":     ["NZD", "USD"],
+        "strategy_type":  "PACIFIC_REVERSION",
+        "strategy_extra_rules": (
+            "ESTRATEGIA PACIFIC_REVERSION — NZDUSD / Kiwi (NZDUSD):\n"
+            "- Opera 24h. Ciclos claros y predecibles, especialmente en sesión asiática (00-09 UTC).\n"
+            "- Correlacionado con AUDUSD pero movimientos más contenidos y con mejor ratio S/R.\n"
+            "- Fisher extremo (>2.0 o <-2.0) + Hilbert LOCAL_MIN/MAX: señales de reversión fiables.\n"
+            "- RBNZ (Banco Central NZ) y datos de empleo NZ mueven el par significativamente.\n"
+            "- Menor liquidez que AUD — ampliar sl_atr_mult en noticias de impacto alto."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.12,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0008,
+        "price_scale":    0.60,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 17. EUR/GBP — 24/5 ─────────────────────────────────────
+    _sym("EURGBP"): {
+        "name":           "Euro / Libra (Channel)",
+        "currencies":     ["EUR", "GBP"],
+        "strategy_type":  "EU_CROSS_RANGE",
+        "strategy_extra_rules": (
+            "ESTRATEGIA EU_CROSS_RANGE — EURGBP / Channel (EURGBP):\n"
+            "- Opera 24h. Mayor actividad durante sesión europea (07-17 UTC).\n"
+            "- Par de rango por excelencia: movimientos muy predecibles dentro de S/R bien definidos.\n"
+            "- Estrategia primaria: reversión desde soporte/resistencia con Fisher extremo.\n"
+            "- Hurst rara vez supera 0.55 — no buscar tendencias largas, preferir reversiones.\n"
+            "- ECB y BOE: eventos de ambos bancos mueven el par. El calendario pausará.\n"
+            "- Spread bajo en IC Markets durante sesión europea."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.4,
+        "tp_atr_mult":    2.8,
+        "be_atr_mult":    2.0,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.08,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0006,
+        "price_scale":    0.85,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.92,
+        "memory_warn_threshold":  0.82,
+        "memory_decay_days":      30,
+    },
+
+    # ── 18. AUD/JPY — 24/5 ─────────────────────────────────────
+    _sym("AUDJPY"): {
+        "name":           "Dólar Australiano / Yen (Risk Barometer)",
+        "currencies":     ["AUD", "JPY"],
+        "strategy_type":  "RISK_CARRY_PACIFIC",
+        "strategy_extra_rules": (
+            "ESTRATEGIA RISK_CARRY_PACIFIC — AUDJPY / Risk Barometer (AUDJPY):\n"
+            "- Opera 24h. Activo barométrico: sube en risk-ON, cae en risk-OFF.\n"
+            "- Sesión asiática (00-09 UTC) es la más activa — Tokio y Sídney simultáneos.\n"
+            "- En risk-ON global (VIX bajo): seguir tendencia alcista con Kalman.\n"
+            "- En risk-OFF (VIX alto): señales bajistas con mayor peso.\n"
+            "- Correlacionado con AUDUSD y USDJPY — evitar tener las 3 abiertas simultáneamente.\n"
+            "- RBA y BOJ pueden mover el par 100+ pips. El calendario pausará."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    2.0,
+        "tp_atr_mult":    4.0,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   32,
+        "rsi_overbought": 68,
+        "min_confidence": 6,
+        "min_hurst":      0.42,
+        "sr_tolerance_pct": 0.15,
+        "sr_lookback":    130,
+        "sr_timeframes":  ["M15", "H1", "H4"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3},
+        "atr_norm_factor":  0.22,
+        "price_scale":    95.0,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 19. ETH/USD — 24/7 ─────────────────────────────────────
+    _sym("ETHUSD"): {
+        "name":           "Ethereum / Dólar",
+        "currencies":     ["USD"],
+        "strategy_type":  "CRYPTO_WAVE_ETH",
+        "strategy_extra_rules": (
+            "ESTRATEGIA CRYPTO_WAVE_ETH — Ethereum (ETHUSD):\n"
+            "- Opera 7 días a la semana, 24 horas (igual que Bitcoin).\n"
+            "- Beta de BTC: cuando BTC sube, ETH sube más. Cuando BTC cae, ETH cae más.\n"
+            "- Hurst > 0.46 requerido. ETH aleatorio = trampa igual que BTC.\n"
+            "- Fisher extremo (>3.0 o <-3.0) señala reversiones de ciclo importantes.\n"
+            "- Mayor volatilidad intradiaria que BTC — sl_atr_mult más alto.\n"
+            "- Mejor ventana: 14-22 UTC (Europa activa + Asia despertando).\n"
+            "- Eventos de red Ethereum (upgrades, EIP) pueden dar movimientos bruscos."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    4.5,
+        "tp_atr_mult":    9.0,
+        "be_atr_mult":    3.5,
+        "rsi_oversold":   28,
+        "rsi_overbought": 72,
+        "min_confidence": 7,
+        "min_hurst":      0.46,
+        "sr_tolerance_pct": 0.60,
+        "sr_lookback":    150,
+        "sr_timeframes":  ["M15", "H1", "H4", "D1"],
+        "tf_weights":     {"M15": 1, "H1": 2, "H4": 3, "D1": 4},
+        "atr_norm_factor":  50.0,
+        "price_scale":    2500.0,
+        "news_topics":    "blockchain,technology,economy_monetary",
+        "memory_min_trades":      3,
+        "memory_block_threshold": 0.85,
+        "memory_warn_threshold":  0.75,
+        "memory_decay_days":      20,
+    },
+
+    # ── 20. US30 (Dow Jones) — ampliado ─────────────────────────
+    _sym("US30"): {
+        "name":           "Dow Jones Industrial Average",
+        "currencies":     ["USD"],
+        "strategy_type":  "DOW_BREAKOUT",
+        "strategy_extra_rules": (
+            "ESTRATEGIA DOW_BREAKOUT — Dow Jones (US30):\n"
+            "- Opera casi 24h como CFD en IC Markets.\n"
+            "- Sesión americana (13-21 UTC): máxima volatilidad y calidad de señal.\n"
+            "- Altamente correlacionado con US500 — evitar tener ambos abiertos simultáneamente.\n"
+            "- DOW tiene menor exposición a tech que USTEC — más influenciado por industriales y finanzas.\n"
+            "- El filtro ATR descartará automáticamente las horas sin movimiento suficiente.\n"
+            "- Fed, CPI, NFP: el calendario pausará automáticamente.\n"
+            "- Hurst en índices es naturalmente 0.35-0.45. Esto es normal y esperable."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.20,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["M5", "M15", "H1", "H4"],
+        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3, "H4": 4},
+        "atr_norm_factor":  200.0,
+        "price_scale":    40000.0,
+        "news_topics":    "economy_monetary,economy_macro,finance,earnings",
+        "memory_min_trades":      6,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      30,
     },
 }
 
