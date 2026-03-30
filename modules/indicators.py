@@ -1048,7 +1048,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
                         ext_data_source = "dukascopy"
 
             # FASE 11: si Dukascopy no aplica, intentar Twelve Data o Polygon
-            # (principalmente para índices: US500m, NAS100m, GER40m)
+            # (principalmente para índices: US500m, USTEC, DE40)
             if real_vol_df is None and _EXT_PROVIDERS_AVAILABLE:
                 try:
                     import config as cfg11

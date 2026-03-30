@@ -38,12 +38,12 @@ HARD_CLOSE_HOURS = {
     # En la práctica Exness los tiene 23h casi continuas (22:00-21:00 UTC)
     # Permitimos 22:00 en adelante (pre-market NY tiene movimiento)
     "US500m":  {"hard_open": 0,  "hard_close": 24},   # 23h continuas en Exness
-    "NAS100m": {"hard_open": 0,  "hard_close": 24},
+    "USTEC":   {"hard_open": 0,  "hard_close": 24},
     # Petróleo — cierre de 1h a las 23:00 UTC en Exness
     "USOILm":  {"hard_open": 1,  "hard_close": 23},
     # DAX — cierre real 22:00 UTC (mercado alemán cierra 17:00 Frankfurt = 16:00 UTC)
     # Pero Exness mantiene el CFD casi 24h, solo cierra 1h
-    "GER40m":  {"hard_open": 0,  "hard_close": 24},
+    "DE40":    {"hard_open": 0,  "hard_close": 24},
     # Forex y metales — 24/5, sin cierre duro
     "XAUUSDm": {"hard_open": 0,  "hard_close": 24},
     "XAGUSDm": {"hard_open": 0,  "hard_close": 24},
@@ -69,7 +69,7 @@ ATR_MIN_PCT = {
     "XAUUSDm": 0.035,   # Oro: ATR mínimo $1.75 con precio ~$5000
     "XAGUSDm": 0.040,
     # Índices y petróleo
-    "US500m":  0.020, "NAS100m": 0.025, "GER40m": 0.018,
+    "US500m":  0.020, "USTEC":   0.025, "DE40":   0.018,
     "USOILm":  0.035,
     # Cripto — alta volatilidad normal
     "BTCUSDm": 0.060,

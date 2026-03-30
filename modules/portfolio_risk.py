@@ -35,12 +35,12 @@ CORRELATION_MATRIX = {
     ("GBPUSDm", "USDJPYm"): -0.60,
     ("EURJPYm", "GBPJPYm"):  0.90,
     # Índices americanos
-    ("US500m",  "NAS100m"):   0.93,
+    ("US500m",  "USTEC"):     0.93,
     # Metales
     ("XAUUSDm", "XAGUSDm"):  0.85,
     # Índices vs metales (baja pero relevante en crisis)
     ("XAUUSDm", "US500m"):  -0.30,
-    ("XAUUSDm", "NAS100m"): -0.25,
+    ("XAUUSDm", "USTEC"):   -0.25,
 }
 
 # Umbral máximo de riesgo efectivo del portafolio (% del balance).

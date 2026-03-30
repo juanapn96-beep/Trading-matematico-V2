@@ -149,7 +149,7 @@ SYMBOL_TO_CURRENCIES = {
     "EURUSDm": ["EUR","USD"], "GBPUSDm": ["GBP","USD"],
     "USDJPYm": ["USD","JPY"], "GBPJPYm": ["GBP","JPY"],
     "XAGUSDm": ["XAG","USD"], "USOILm":  ["OIL","USD"],
-    "NAS100m": ["USD"],        "GER40m":  ["EUR"],
+    "USTEC":   ["USD"],        "DE40":    ["EUR"],
     "EURJPYm": ["EUR","JPY"],  "BTCUSDm": ["BTC","USD"],
 }
 

@@ -358,12 +358,12 @@ SYMBOLS = {
     },
 
     # ── 9. NASDAQ 100 — ampliado ────────────────────────────────
-    "NAS100m": {
+    "USTEC": {
         "name":           "Nasdaq 100",
         "currencies":     ["USD"],
         "strategy_type":  "TECH_MOMENTUM",
         "strategy_extra_rules": (
-            "ESTRATEGIA TECH_MOMENTUM — Nasdaq 100 (NAS100m):\n"
+            "ESTRATEGIA TECH_MOMENTUM — Nasdaq 100 (USTEC):\n"
             "- En Exness como CFD opera casi 24h.\n"
             "- Pre-market americano (11-13 UTC) tiene movimiento real.\n"
             "- Sesión americana 13-21 UTC: máxima volatilidad y calidad de señal.\n"
@@ -395,12 +395,12 @@ SYMBOLS = {
     },
 
     # ── 10. DAX 40 — ampliado ───────────────────────────────────
-    "GER40m": {
+    "DE40": {
         "name":           "DAX 40 (Alemania)",
         "currencies":     ["EUR"],
         "strategy_type":  "FRANKFURT_BREAKOUT",
         "strategy_extra_rules": (
-            "ESTRATEGIA FRANKFURT_BREAKOUT — DAX 40 (GER40m):\n"
+            "ESTRATEGIA FRANKFURT_BREAKOUT — DAX 40 (DE40):\n"
             "- En Exness opera casi 24h como CFD. El filtro ATR descarta horas sin movimiento.\n"
             "- MODO MADRUGADA (00-06 UTC): movimiento reducido, solo reversiones S/R muy claras.\n"
             "- MODO APERTURA (06-09 UTC): buscar ruptura del rango nocturno con volume profile.\n"

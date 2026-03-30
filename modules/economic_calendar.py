@@ -34,8 +34,8 @@ SYMBOL_CURRENCIES: Dict[str, List[str]] = {
     "GBPJPYm":  ["GBP", "JPY"],
     "XAGUSDm":  ["USD"],
     "USOILm":   ["USD"],
-    "NAS100m":  ["USD"],
-    "GER40m":   ["EUR"],
+    "USTEC":    ["USD"],
+    "DE40":     ["EUR"],
     "EURJPYm":  ["EUR", "JPY"],
     "BTCUSDm":  ["USD"],
 }
