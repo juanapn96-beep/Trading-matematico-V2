@@ -338,7 +338,7 @@ SYMBOLS = {
     },
 
     # ── 8. WTI CRUDE OIL — casi 24/5 ───────────────────────────
-    _sym("USOIL"): {
+    _sym("XTIUSD"): {
         "name":           "Petróleo WTI (Crude Oil)",
         "currencies":     ["USD"],
         "strategy_type":  "RANGE_BREAKOUT_OIL",
