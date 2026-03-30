@@ -1,6 +1,14 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — config.py  (v6.5 — ENV SECURIZATION)          ║
+║   ZAR ULTIMATE BOT v6 — config.py  (v6.6 — MEMORY WARMUP FIX)        ║
+║                                                                          ║
+║   CAMBIOS v6.6:                                                         ║
+║   • FIX CRÍTICO: Warmup ya no bloquea RANGING/MIXED/VOLATILE          ║
+║   • should_block inicializado correctamente (evita UnboundLocalError)  ║
+║   • XAGUSD memory_min_trades: 4→8, block_threshold: 0.88→0.92        ║
+║   • EURUSD/XTIUSD memory_min_trades subido para estrategias rango     ║
+║   • US500/USTEC/DE40 memory_min_trades: 4→6 (índices en MIXED)       ║
+║   • WARMUP_TRADE_COUNT default: 100→50 (menos bloqueos en arranque)  ║
 ║                                                                          ║
 ║   CAMBIOS v6.5:                                                         ║
 ║   • FASE 0: Credenciales migradas a .env (python-dotenv)               ║
@@ -153,7 +161,8 @@ SYMBOLS = {
         "atr_norm_factor":  20.0,
         "price_scale":    6700.0,
         "news_topics":    "economy_monetary,economy_macro,finance,earnings",
-        "memory_min_trades":      4,
+        # FIX v6.6: min_trades 4→6 (índices tienen Hurst bajo — siempre en MIXED)
+        "memory_min_trades":      6,
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      30,
@@ -189,9 +198,10 @@ SYMBOLS = {
         "atr_norm_factor":  0.0012,
         "price_scale":    1.10,
         "news_topics":    "economy_monetary,forex,economy_macro",
-        "memory_min_trades":      5,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
+        # FIX v6.6: min_trades 5→7 (estrategia de reversión necesita más muestra)
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
         "memory_decay_days":      30,
     },
 
@@ -331,10 +341,14 @@ SYMBOLS = {
         "atr_norm_factor":  0.60,
         "price_scale":    32.0,
         "news_topics":    "economy_monetary,economy_macro,finance",
-        "memory_min_trades":      4,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
-        "memory_decay_days":      40,
+        # FIX v6.6: min_trades 4→8 (necesita muestra mayor para bloquear en estrategia reversión)
+        # block_threshold 0.88→0.92 (más difícil de bloquear — XAGUSD opera en rangos)
+        # warn_threshold  0.78→0.82
+        # decay_days      40→30 (olvidar pérdidas antiguas más rápido)
+        "memory_min_trades":      8,
+        "memory_block_threshold": 0.92,
+        "memory_warn_threshold":  0.82,
+        "memory_decay_days":      30,
     },
 
     # ── 8. WTI CRUDE OIL — casi 24/5 ───────────────────────────
@@ -367,9 +381,10 @@ SYMBOLS = {
         "atr_norm_factor":  1.50,
         "price_scale":    75.0,
         "news_topics":    "economy_macro,energy,commodities",
-        "memory_min_trades":      4,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
+        # FIX v6.6: min_trades 4→7 (estrategia de rango necesita más muestra)
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
         "memory_decay_days":      30,
     },
 
@@ -404,7 +419,8 @@ SYMBOLS = {
         "atr_norm_factor":  60.0,
         "price_scale":    21000.0,
         "news_topics":    "economy_monetary,economy_macro,technology,earnings",
-        "memory_min_trades":      4,
+        # FIX v6.6: min_trades 4→6 (índices tienen Hurst bajo — siempre en MIXED)
+        "memory_min_trades":      6,
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      30,
@@ -442,7 +458,8 @@ SYMBOLS = {
         "atr_norm_factor":  50.0,
         "price_scale":    22000.0,
         "news_topics":    "economy_monetary,economy_macro,forex",
-        "memory_min_trades":      4,
+        # FIX v6.6: min_trades 4→6 (índices tienen Hurst bajo — siempre en MIXED)
+        "memory_min_trades":      6,
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      30,
@@ -549,7 +566,11 @@ CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT = float(
 # Mientras el bot tenga menos de WARMUP_TRADE_COUNT trades en memoria,
 # opera en "Modo Calentamiento": lot reducido + filtros más estrictos.
 # Configurable vía .env para ajuste sin tocar el código.
-WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "100")))
+# FIX v6.6: Reducido de 100 a 50. Con 100 trades de warmup, el bot bloqueaba
+# demasiado tiempo en todos los símbolos que no sean tendencia pura.
+# 50 trades es suficiente para tener una muestra estadística inicial.
+# Configurable vía .env: WARMUP_TRADE_COUNT=50
+WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "50")))
 WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "0.5"))
 
 # Tiempo de espera entre iteraciones del ciclo principal (segundos)

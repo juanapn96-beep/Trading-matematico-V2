@@ -1488,21 +1488,36 @@ def check_memory(
         w_reg * regime_score
     )
 
+    # ── Inicialización de should_block ───────────────────────────
+    # IMPORTANTE: debe inicializarse ANTES de cualquier uso condicional
+    # para evitar UnboundLocalError cuando warmup_mode=False.
+    should_block = False
+
     # ── Modo Calentamiento (Cold Start) ──────────────────────────
     # Si no hay suficientes datos globales, endurecer filtros de coseno.
+    # SOLO bloquear en regímenes sin estructura (CHAOTIC).
+    # RANGING, MIXED y VOLATILE son regímenes válidos para operar — no bloquear.
+    # FIX v6.6: Ampliado de ["TRENDING_UP","TRENDING_DOWN"] a todos los regímenes
+    # excepto CHAOTIC, que ya tiene su propio bloqueo explícito debajo.
+    # El umbral subió de 0.55 a 0.65 para evitar bloqueos excesivos en warmup.
     warmup_trade_count = getattr(cfg, "WARMUP_TRADE_COUNT", MLP_ACTIVATION)
     warmup_mode = total_trades < warmup_trade_count
     if warmup_mode:
-        # En warmup: endurecer el bloqueo por coseno (bajar umbral de ensemble)
-        # y forzar bloqueo si el régimen no es favorable
-        if regime not in ("TRENDING_UP", "TRENDING_DOWN"):
-            if ensemble_score > 0.55:
+        # En warmup solo bloquear si el régimen es CHAOTIC O si el ensemble es
+        # muy alto (>0.65) Y el régimen es desconocido.
+        # RANGING/MIXED/VOLATILE son operables — no bloquear por régimen.
+        if regime == "CHAOTIC":
+            should_block = True
+            cosine_warnings.append(
+                f"⚠️ Modo Calentamiento — Régimen CAÓTICO ({total_trades}/{warmup_trade_count} trades)"
+            )
+        elif regime not in ("TRENDING_UP", "TRENDING_DOWN", "RANGING", "MIXED", "VOLATILE"):
+            # Régimen desconocido — ser conservador
+            if ensemble_score > 0.65:
                 should_block = True
                 cosine_warnings.append(
                     f"⚠️ Modo Calentamiento ({total_trades}/{warmup_trade_count} trades)"
                 )
-        if regime == "CHAOTIC":
-            should_block = True
 
     # ── Decisión final ────────────────────────────────────────────
 
