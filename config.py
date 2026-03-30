@@ -520,6 +520,9 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
 SYMBOL_COOLDOWN_SEC = 180
 
+# Tiempo de espera entre iteraciones del ciclo principal (segundos)
+LOOP_SLEEP_SEC      = 30
+
 MAX_DAILY_LOSS      = 0.05   # 5% pérdida máxima diaria
 
 # ================================================================
