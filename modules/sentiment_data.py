@@ -4,7 +4,7 @@
 ║                                                                  ║
 ║   Datos de sentimiento de mercado de fuentes gratuitas:         ║
 ║   • Crypto Fear & Greed Index  (BTCUSDm)                       ║
-║   • CBOE VIX — volatilidad implícita  (US500m, NAS100m)        ║
+║   • CBOE VIX — volatilidad implícita  (US500m, USTEC)         ║
 ║   • CFTC COT Report — posicionamiento institucional             ║
 ║     (forex, commodities, índices, crypto)                       ║
 ║                                                                  ║
@@ -271,8 +271,8 @@ def _get_cot_for_symbol(symbol: str) -> Optional[dict]:
 SYMBOL_SENTIMENT_MAP = {
     "BTCUSDm": ["crypto_fng", "cot"],
     "US500m":  ["vix", "cot"],
-    "NAS100m": ["vix"],
-    "GER40m":  ["vix"],
+    "USTEC":   ["vix"],
+    "DE40":    ["vix"],
     "XAUUSDm": ["vix", "cot"],
     "XAGUSDm": ["vix", "cot"],
     "USOILm":  ["vix", "cot"],
