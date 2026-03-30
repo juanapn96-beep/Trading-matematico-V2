@@ -6,9 +6,9 @@
 ║   • FASE 0: Credenciales migradas a .env (python-dotenv)               ║
 ║   • BREAKEVEN_ATR_MULT: BE por ATR en vez de pips fijos                ║
 ║   • SYMBOL_COOLDOWN_SEC: cooldown entre trades del mismo símbolo       ║
-║   • US500m min_hurst: 0.45→0.38 (índices operan con Hurst bajo)       ║
-║   • XAGUSDm min_hurst: 0.38→0.35 (casi siempre bajo el umbral)        ║
-║   • USOILm min_hurst: 0.42→0.38                                        ║
+║   • US500 min_hurst: 0.45→0.38 (índices operan con Hurst bajo)       ║
+║   • XAGUSD min_hurst: 0.38→0.35 (casi siempre bajo el umbral)        ║
+║   • USOIL min_hurst: 0.42→0.38                                        ║
 ║   • be_atr_mult por símbolo (personalizable)                           ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
@@ -44,7 +44,7 @@ MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
 # Sufijo de símbolo del broker.  Exness usa "m" (XAUUSDm, EURUSDm…).
 # IC Markets usa "" vacío (XAUUSD, EURUSD…).  Cambia en el .env para migrar.
 # Nota: USTEC y DE40 en Exness no llevan sufijo; mantenlos en _NO_SUFFIX.
-BROKER_SUFFIX = os.environ.get("BROKER_SUFFIX", "m")
+BROKER_SUFFIX = os.environ.get("BROKER_SUFFIX", "")
 
 # Símbolos que NO llevan el sufijo en ningún broker (por convención del feed).
 _NO_SUFFIX = {"USTEC", "DE40"}
@@ -88,7 +88,7 @@ SYMBOLS = {
         "currencies":     ["USD"],
         "strategy_type":  "VOLATILITY_CYCLE",
         "strategy_extra_rules": (
-            "ESTRATEGIA VOLATILITY_CYCLE — ORO (XAUUSDm):\n"
+            "ESTRATEGIA VOLATILITY_CYCLE — ORO (XAUUSD):\n"
             "- Opera 24 horas, 5 días. El oro tiene volatilidad incluso en sesión asiática.\n"
             "- Sesión asiática (00-07 UTC): movimientos más lentos pero ciclos Hilbert muy limpios.\n"
             "- Sesión europea (07-13 UTC): volatilidad media, buenos entries con S/R.\n"
@@ -127,7 +127,7 @@ SYMBOLS = {
         "currencies":     ["USD"],
         "strategy_type":  "MOMENTUM_TREND",
         "strategy_extra_rules": (
-            "ESTRATEGIA MOMENTUM_TREND — S&P 500 (US500m):\n"
+            "ESTRATEGIA MOMENTUM_TREND — S&P 500 (US500):\n"
             "- Opera casi 24h en Exness (CFD). Sesión americana 13-21 UTC es la de mayor volatilidad.\n"
             "- Pre-market (11-13 UTC): hay movimiento, con cautela extra en S/R de día anterior.\n"
             "- After-hours (21-23 UTC): movimiento reducido, solo entrar con señal muy clara.\n"
@@ -165,7 +165,7 @@ SYMBOLS = {
         "currencies":     ["EUR", "USD"],
         "strategy_type":  "CYCLE_REVERSION",
         "strategy_extra_rules": (
-            "ESTRATEGIA CYCLE_REVERSION — EURUSD (EURUSDm):\n"
+            "ESTRATEGIA CYCLE_REVERSION — EURUSD (EURUSD):\n"
             "- Opera 24h. Par más líquido del mundo — hay movimiento a cualquier hora.\n"
             "- Sesión asiática (00-07 UTC): rango más estrecho, ideal para reversiones S/R.\n"
             "- Sesión europea (07-17 UTC): máxima actividad, seguir momentum.\n"
@@ -201,7 +201,7 @@ SYMBOLS = {
         "currencies":     ["GBP", "USD"],
         "strategy_type":  "MOMENTUM_SURGE",
         "strategy_extra_rules": (
-            "ESTRATEGIA MOMENTUM_SURGE — GBPUSD / Cable (GBPUSDm):\n"
+            "ESTRATEGIA MOMENTUM_SURGE — GBPUSD / Cable (GBPUSD):\n"
             "- Opera 24h. Hora pico: 7-12 UTC (Frankfurt-Londres). Segunda ventana: 13-17 UTC.\n"
             "- Sesión asiática (00-07 UTC): movimiento reducido, priorizar reversiones S/R claras.\n"
             "- Buscar MACD histograma acelerándose + HA en dirección por 3+ velas.\n"
@@ -237,7 +237,7 @@ SYMBOLS = {
         "currencies":     ["USD", "JPY"],
         "strategy_type":  "TREND_KALMAN",
         "strategy_extra_rules": (
-            "ESTRATEGIA TREND_KALMAN — USDJPY / Ninja (USDJPYm):\n"
+            "ESTRATEGIA TREND_KALMAN — USDJPY / Ninja (USDJPY):\n"
             "- Opera 24h. Sesión asiática (00-09 UTC) es CLAVE para USDJPY — Japón activo.\n"
             "- Kalman slope es el indicador primario. Sin slope claro → HOLD.\n"
             "- Sesión asiática: seguir tendencia con Kalman. Sesión europea/americana: momentum.\n"
@@ -273,7 +273,7 @@ SYMBOLS = {
         "currencies":     ["GBP", "JPY"],
         "strategy_type":  "DRAGON_EXPLOSION",
         "strategy_extra_rules": (
-            "ESTRATEGIA DRAGON_EXPLOSION — GBPJPY / El Dragón (GBPJPYm):\n"
+            "ESTRATEGIA DRAGON_EXPLOSION — GBPJPY / El Dragón (GBPJPY):\n"
             "- Opera 24h PERO con la máxima selectividad. El Dragón es peligroso a cualquier hora.\n"
             "- Hora óptima: 7-12 UTC (overlap Europa-Londres). Segunda ventana: 0-4 UTC (Tokio activo).\n"
             "- REQUIERE todos los primarios alineados: h1_trend + MACD + Hilbert + SuperTrend + Kalman + HA.\n"
@@ -308,7 +308,7 @@ SYMBOLS = {
         "currencies":     ["USD"],
         "strategy_type":  "GOLD_BETA_REVERSION",
         "strategy_extra_rules": (
-            "ESTRATEGIA GOLD_BETA_REVERSION — Plata (XAGUSDm):\n"
+            "ESTRATEGIA GOLD_BETA_REVERSION — Plata (XAGUSD):\n"
             "- Opera 24h siguiendo al oro. Cuando el oro tiene volatilidad, la plata también.\n"
             "- Sesión americana (13-21 UTC): máxima liquidez, spread más bajo.\n"
             "- Fisher < -2.5 con oro alcista → fuerte señal BUY en plata.\n"
@@ -343,7 +343,7 @@ SYMBOLS = {
         "currencies":     ["USD"],
         "strategy_type":  "RANGE_BREAKOUT_OIL",
         "strategy_extra_rules": (
-            "ESTRATEGIA RANGE_BREAKOUT_OIL — Petróleo WTI (USOILm):\n"
+            "ESTRATEGIA RANGE_BREAKOUT_OIL — Petróleo WTI (USOIL):\n"
             "- En Exness opera 23h (1h de cierre a las 23:00 UTC).\n"
             "- Mayor volatilidad: 13-18 UTC (apertura NY + overlap con Europa).\n"
             "- Miércoles 14:00-15:30 UTC: datos EIA inventarios → CALENDARIO pausará.\n"
@@ -454,7 +454,7 @@ SYMBOLS = {
         "currencies":     ["EUR", "JPY"],
         "strategy_type":  "RISK_CARRY",
         "strategy_extra_rules": (
-            "ESTRATEGIA RISK_CARRY — EURJPY / Yuro (EURJPYm):\n"
+            "ESTRATEGIA RISK_CARRY — EURJPY / Yuro (EURJPY):\n"
             "- Opera 24h. Sesión asiática (00-09 UTC) es MUY activa para EURJPY por Tokio.\n"
             "- Risk-ON global → EURJPY sube a cualquier hora. Risk-OFF → cae.\n"
             "- Hilbert cycle + Kalman slope en combinación dan las mejores señales.\n"
@@ -488,7 +488,7 @@ SYMBOLS = {
         "currencies":     ["USD"],
         "strategy_type":  "CRYPTO_WAVE",
         "strategy_extra_rules": (
-            "ESTRATEGIA CRYPTO_WAVE — Bitcoin (BTCUSDm):\n"
+            "ESTRATEGIA CRYPTO_WAVE — Bitcoin (BTCUSD):\n"
             "- Único activo que opera 7 días a la semana, 24 horas.\n"
             "- Fin de semana: puede haber buenas oportunidades, pero con mayor spread.\n"
             "- El filtro ATR (0.06% mínimo) descartará automáticamente los momentos dormidos.\n"
