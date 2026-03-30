@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — risk_manager.py  (v6.3 — 24/5)        ║
+║   ZAR ULTIMATE BOT v6 — risk_manager.py  (v6.4 — 24/5)        ║
 ║                                                                  ║
 ║   CAMBIO v6.3 — Filtro dinámico de calidad de mercado:         ║
 ║                                                                  ║
@@ -18,6 +18,11 @@
 ║                                                                  ║
 ║   Los índices (US500, NAS100, GER40, USOILm) tienen una hora   ║
 ║   de cierre real de mercado que SÍ se respeta.                 ║
+║                                                                  ║
+║   CAMBIO v6.4 — Circuit Breaker individual:                    ║
+║   Si el drawdown de una posición supera                        ║
+║   CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT del balance,                ║
+║   se fuerza el cierre inmediato (Cisne Negro).                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -30,6 +35,18 @@ import config as cfg
 
 log = logging.getLogger(__name__)
 
+# ── Sufijo del broker (centralizado en config.py) ───────────────
+_BROKER_SUFFIX  = cfg.BROKER_SUFFIX    # "m" para Exness, "" para IC Markets
+_NO_SUFFIX_RM   = getattr(cfg, "_NO_SUFFIX", {"USTEC", "DE40"})
+
+
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in _NO_SUFFIX_RM:
+        return base
+    return f"{base}{_BROKER_SUFFIX}"
+
+
 # ── Horarios de cierre REAL de mercado (no de liquidez) ─────────
 # Estos instrumentos literalmente no tienen precio fuera de estos rangos.
 # El resto opera 24/5 y solo se filtra por calidad de spread/ATR.
@@ -37,42 +54,42 @@ HARD_CLOSE_HOURS = {
     # Índices americanos — cierre real 21:00-22:00 UTC, reapertura 22:00 UTC
     # En la práctica Exness los tiene 23h casi continuas (22:00-21:00 UTC)
     # Permitimos 22:00 en adelante (pre-market NY tiene movimiento)
-    "US500m":  {"hard_open": 0,  "hard_close": 24},   # 23h continuas en Exness
-    "USTEC":   {"hard_open": 0,  "hard_close": 24},
+    _sym("US500"):  {"hard_open": 0,  "hard_close": 24},   # 23h continuas en Exness
+    _sym("USTEC"):  {"hard_open": 0,  "hard_close": 24},
     # Petróleo — cierre de 1h a las 23:00 UTC en Exness
-    "USOILm":  {"hard_open": 1,  "hard_close": 23},
+    _sym("USOIL"):  {"hard_open": 1,  "hard_close": 23},
     # DAX — cierre real 22:00 UTC (mercado alemán cierra 17:00 Frankfurt = 16:00 UTC)
     # Pero Exness mantiene el CFD casi 24h, solo cierra 1h
-    "DE40":    {"hard_open": 0,  "hard_close": 24},
+    _sym("DE40"):   {"hard_open": 0,  "hard_close": 24},
     # Forex y metales — 24/5, sin cierre duro
-    "XAUUSDm": {"hard_open": 0,  "hard_close": 24},
-    "XAGUSDm": {"hard_open": 0,  "hard_close": 24},
-    "EURUSDm": {"hard_open": 0,  "hard_close": 24},
-    "GBPUSDm": {"hard_open": 0,  "hard_close": 24},
-    "USDJPYm": {"hard_open": 0,  "hard_close": 24},
-    "GBPJPYm": {"hard_open": 0,  "hard_close": 24},
-    "EURJPYm": {"hard_open": 0,  "hard_close": 24},
+    _sym("XAUUSD"): {"hard_open": 0,  "hard_close": 24},
+    _sym("XAGUSD"): {"hard_open": 0,  "hard_close": 24},
+    _sym("EURUSD"): {"hard_open": 0,  "hard_close": 24},
+    _sym("GBPUSD"): {"hard_open": 0,  "hard_close": 24},
+    _sym("USDJPY"): {"hard_open": 0,  "hard_close": 24},
+    _sym("GBPJPY"): {"hard_open": 0,  "hard_close": 24},
+    _sym("EURJPY"): {"hard_open": 0,  "hard_close": 24},
     # Cripto — 24/7 literal
-    "BTCUSDm": {"hard_open": 0,  "hard_close": 24},
+    _sym("BTCUSD"): {"hard_open": 0,  "hard_close": 24},
 }
 
 # ── Símbolo → es cripto (opera fines de semana) ────────────────
-CRYPTO_SYMBOLS = {"BTCUSDm", "ETHUSDm", "XRPUSDm"}
+CRYPTO_SYMBOLS = {_sym("BTCUSD"), _sym("ETHUSD"), _sym("XRPUSD")}
 
 # ── ATR mínimo como % del precio para que valga la pena operar ──
 # Si el mercado no se mueve lo suficiente, el spread se come la ganancia.
 ATR_MIN_PCT = {
     # Forex majors — necesitan al menos 0.02% de ATR vs precio
-    "EURUSDm": 0.020, "GBPUSDm": 0.025, "USDJPYm": 0.015,
-    "GBPJPYm": 0.030, "EURJPYm": 0.020,
+    _sym("EURUSD"): 0.020, _sym("GBPUSD"): 0.025, _sym("USDJPY"): 0.015,
+    _sym("GBPJPY"): 0.030, _sym("EURJPY"): 0.020,
     # Metales
-    "XAUUSDm": 0.035,   # Oro: ATR mínimo $1.75 con precio ~$5000
-    "XAGUSDm": 0.040,
+    _sym("XAUUSD"): 0.035,   # Oro: ATR mínimo $1.75 con precio ~$5000
+    _sym("XAGUSD"): 0.040,
     # Índices y petróleo
-    "US500m":  0.020, "USTEC":   0.025, "DE40":   0.018,
-    "USOILm":  0.035,
+    _sym("US500"):  0.020, _sym("USTEC"):  0.025, _sym("DE40"):   0.018,
+    _sym("USOIL"):  0.035,
     # Cripto — alta volatilidad normal
-    "BTCUSDm": 0.060,
+    _sym("BTCUSD"): 0.060,
 }
 
 # Valor por defecto si el símbolo no está en el mapa
@@ -297,3 +314,45 @@ def get_rr(price: float, sl: float, tp: float) -> float:
     risk   = abs(price - sl)
     reward = abs(tp - price)
     return round(reward / risk, 2) if risk > 0 else 0.0
+
+
+# ════════════════════════════════════════════════════════════════
+#  CIRCUIT BREAKER INDIVIDUAL (Cisne Negro)
+# ════════════════════════════════════════════════════════════════
+
+def check_circuit_breaker(pos: dict, balance: float) -> Tuple[bool, str]:
+    """
+    Verifica si una posición abierta debe cerrarse de emergencia por superar
+    el drawdown máximo permitido (CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT del balance).
+
+    Este mecanismo es INDEPENDIENTE del trailing stop y del equity guard global.
+    Se activa ante eventos de "Cisne Negro" donde el precio colapsa violentamente
+    antes de que el SL normal pueda ejecutarse al precio esperado.
+
+    Args:
+        pos:     Diccionario de posición (campos: profit, ticket, symbol).
+        balance: Balance actual de la cuenta en divisa de la cuenta.
+
+    Returns:
+        (debe_cerrar: bool, motivo: str)
+    """
+    max_dd_pct = getattr(cfg, "CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT", 3.0)
+    if max_dd_pct <= 0 or balance <= 0:
+        return False, "Circuit Breaker desactivado"
+
+    profit = float(pos.get("profit", 0.0))
+    if profit >= 0:
+        return False, "Posición en ganancia"
+
+    loss_pct = abs(profit) / balance * 100.0
+    if loss_pct >= max_dd_pct:
+        symbol = pos.get("symbol", "?")
+        ticket = pos.get("ticket", 0)
+        reason = (
+            f"🚨 CIRCUIT BREAKER: #{ticket} {symbol} "
+            f"drawdown {loss_pct:.2f}% ≥ límite {max_dd_pct:.2f}%"
+        )
+        log.warning(f"[risk/circuit_breaker] {reason}")
+        return True, reason
+
+    return False, f"Drawdown {loss_pct:.2f}% < límite {max_dd_pct:.2f}%"

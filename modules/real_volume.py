@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v6 — modules/real_volume.py  (FASE 9)        ║
+║   ZAR ULTIMATE BOT v6 — modules/real_volume.py  (FASE 9+)       ║
 ║                                                                  ║
 ║   Volumen real de Dukascopy para pares forex donde               ║
 ║   tick_volume de MT5/Exness tiene menor precisión.               ║
@@ -12,7 +12,8 @@
 ║   • Descarga archivos .bi5 (LZMA compressed, 20 bytes/tick)     ║
 ║   • Agrega ticks en candles M5 con volumen real                  ║
 ║   • Cache en memoria con TTL configurable (default 15 min)       ║
-║   • Fallback silencioso → retorna None si falla                  ║
+║   • Fallback seguro: normaliza tick_volume de MT5 para           ║
+║     activos sin datos Dukascopy (XAUUSD, US500, BTCUSD, etc.)   ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -25,18 +26,23 @@ import time
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 import requests
 
 log = logging.getLogger(__name__)
 
-# ── Símbolo map — Exness (con sufijo "m") → Dukascopy (sin sufijo) ──
+# ── Símbolo map — ticker MT5 (con o sin sufijo) → Dukascopy (sin sufijo) ──
+# Solo pares con datos disponibles en Dukascopy.
+# XAUUSDm / XAUUSD, US500m / US500, BTCUSDm / BTCUSD → no tienen feed Dukascopy;
+# para estos se usa el fallback de normalización de tick_volume (ver abajo).
 SYMBOL_MAP: dict = {
-    "EURUSDm": "EURUSD",
-    "GBPUSDm": "GBPUSD",
-    "USDJPYm": "USDJPY",
-    "EURJPYm": "EURJPY",
-    "GBPJPYm": "GBPJPY",
+    # Forex majors (Exness con sufijo "m"; IC Markets sin sufijo)
+    "EURUSDm": "EURUSD", "EURUSD": "EURUSD",
+    "GBPUSDm": "GBPUSD", "GBPUSD": "GBPUSD",
+    "USDJPYm": "USDJPY", "USDJPY": "USDJPY",
+    "EURJPYm": "EURJPY", "EURJPY": "EURJPY",
+    "GBPJPYm": "GBPJPY", "GBPJPY": "GBPJPY",
 }
 
 # Pares con JPY usan 3 decimales (divisor 1000), resto 5 decimales (divisor 100000)
@@ -306,3 +312,115 @@ def get_dukascopy_volume_for_period(
     m5_df.to_csv(cache_csv, index=False)
     log.info(f"[real_volume] Guardado: {cache_csv} ({len(m5_df)} candles M5)")
     return m5_df
+
+
+# ════════════════════════════════════════════════════════════════
+#  FALLBACK — Normalización de tick_volume de MT5
+# ════════════════════════════════════════════════════════════════
+
+def _normalize_tick_volume(mt5_df: pd.DataFrame, symbol: str) -> Optional[pd.DataFrame]:
+    """
+    Normaliza el tick_volume de MT5 para usarlo en cálculos de Volume Profile y VWAP
+    cuando no hay datos reales de Dukascopy disponibles (XAUUSD, US500, BTCUSD, etc.).
+
+    El tick_volume de MT5 es un recuento de ticks (cambios de precio) por vela,
+    no volumen transaccionado.  Para que sea comparable entre activos y entre
+    velas, se aplica una normalización Z-score escalada al rango [1, 1000].
+
+    Args:
+        mt5_df:  DataFrame de MT5 con columnas: time, open, high, low, close,
+                 tick_volume (o volume).
+        symbol:  Nombre del símbolo (para logging).
+
+    Returns:
+        DataFrame M5 con columnas: time, open, high, low, close, volume
+        compatible con volume_profile() en microstructure.py.
+        None si mt5_df es inválido o está vacío.
+    """
+    if mt5_df is None or len(mt5_df) == 0:
+        return None
+
+    df = mt5_df.copy()
+
+    # Usar tick_volume si existe, si no, buscar "volume"
+    vol_col = None
+    for col in ("tick_volume", "volume"):
+        if col in df.columns:
+            vol_col = col
+            break
+
+    if vol_col is None:
+        log.debug(f"[real_volume] {symbol}: sin columna de volumen en mt5_df → fallback nulo")
+        return None
+
+    raw_vol = df[vol_col].astype(float).values
+
+    # Normalización Z-score → escalar al rango [1, 1000]
+    mean_volume = float(np.mean(raw_vol))
+    std_volume  = float(np.std(raw_vol))
+    if std_volume > 0:
+        z = (raw_vol - mean_volume) / std_volume
+    else:
+        z = np.zeros_like(raw_vol)
+
+    # Escalar desde z-score a [1, 1000]
+    z_min, z_max = float(np.min(z)), float(np.max(z))
+    if z_max > z_min:
+        normalized = 1.0 + (z - z_min) / (z_max - z_min) * 999.0
+    else:
+        normalized = np.ones_like(raw_vol) * 100.0
+
+    result = pd.DataFrame({
+        "time":   df["time"].values if "time" in df.columns else pd.RangeIndex(len(df)),
+        "open":   df["open"].values  if "open"  in df.columns else np.nan,
+        "high":   df["high"].values  if "high"  in df.columns else np.nan,
+        "low":    df["low"].values   if "low"   in df.columns else np.nan,
+        "close":  df["close"].values if "close" in df.columns else np.nan,
+        "volume": normalized.astype(float),
+    })
+
+    log.debug(
+        f"[real_volume] {symbol}: tick_volume normalizado "
+        f"(min={normalized.min():.0f} max={normalized.max():.0f} n={len(result)})"
+    )
+    return result
+
+
+def get_volume_or_fallback(
+    symbol: str,
+    mt5_df: Optional[pd.DataFrame] = None,
+    lookback_hours: int = 4,
+    cache_ttl_min: int = 15,
+) -> Optional[pd.DataFrame]:
+    """
+    Intenta obtener volumen real de Dukascopy. Si el símbolo no está soportado
+    (ej. XAUUSD, US500, BTCUSD) o la descarga falla, normaliza el tick_volume
+    del DataFrame de MT5 como aproximación.
+
+    Esta función es el punto de entrada recomendado para microstructure.py.
+
+    Args:
+        symbol:         Símbolo del broker (e.g. "XAUUSDm", "EURUSD").
+        mt5_df:         DataFrame de velas M5 de MT5 con tick_volume.
+                        Necesario para el fallback.
+        lookback_hours: Horas de lookback para Dukascopy.
+        cache_ttl_min:  TTL del caché en memoria.
+
+    Returns:
+        DataFrame M5 con columnas: time, open, high, low, close, volume
+        o None si tanto Dukascopy como el fallback fallan.
+    """
+    # 1. Intentar volumen real de Dukascopy (solo para forex soportados)
+    real_df = get_real_volume_profile(symbol, lookback_hours, cache_ttl_min)
+    if real_df is not None:
+        return real_df
+
+    # 2. Fallback: normalizar tick_volume de MT5
+    if mt5_df is not None and len(mt5_df) > 0:
+        log.debug(
+            f"[real_volume] {symbol}: sin datos Dukascopy — "
+            "usando tick_volume normalizado de MT5"
+        )
+        return _normalize_tick_volume(mt5_df, symbol)
+
+    return None

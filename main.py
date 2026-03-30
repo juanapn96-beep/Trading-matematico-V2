@@ -57,7 +57,7 @@ from modules.neural_brain import (
 from modules.risk_manager import (
     get_lot_size, get_lot_size_kelly, calc_sl_tp, is_rr_valid,
     is_session_valid, is_daily_loss_ok, get_rr,
-    is_market_tradeable,
+    is_market_tradeable, check_circuit_breaker,
 )
 from modules.telegram_notifier import (
     notify_bot_started, notify_trade_opened, notify_breakeven,
@@ -101,6 +101,11 @@ TF_CANDLES = {
     "M1": 300, "M5": 250, "M15": 200,
     "H1": 150, "H4": 100, "D1":  60,
 }
+
+# Desviación máxima de precio (pips) permitida en el cierre de emergencia.
+# Se usa un valor mayor que el cierre normal (20) para garantizar ejecución
+# en condiciones de alta volatilidad (Cisne Negro).
+_EMERGENCY_CLOSE_DEVIATION = 50
 
 # ════════════════════════════════════════════════════════════════
 #  ESTADO GLOBAL
@@ -1183,6 +1188,55 @@ def move_sl(ticket: int, new_sl: float) -> bool:
     return r.retcode == mt5.TRADE_RETCODE_DONE
 
 
+def close_position_market(pos: dict, comment: str = "CB-emergency") -> bool:
+    """
+    Cierra una posición abierta con una orden de mercado inmediata.
+    Usado por el Circuit Breaker de emergencia (Cisne Negro).
+    """
+    ticket    = pos.get("ticket")
+    symbol    = pos.get("symbol")
+    volume    = float(pos.get("volume", 0.01))
+    pos_type  = pos.get("type", 0)   # 0=BUY, 1=SELL
+
+    if not ticket or not symbol or volume <= 0:
+        log.error(f"[close_market] Datos de posición inválidos: {pos}")
+        return False
+
+    tick = mt5.symbol_info_tick(symbol)
+    if tick is None:
+        log.error(f"[close_market] No hay tick para {symbol}")
+        return False
+
+    # Para cerrar un BUY enviamos SELL al precio bid; para SELL enviamos BUY al ask
+    close_type  = mt5.ORDER_TYPE_SELL if pos_type == 0 else mt5.ORDER_TYPE_BUY
+    close_price = tick.bid            if pos_type == 0 else tick.ask
+
+    request = {
+        "action":       mt5.TRADE_ACTION_DEAL,
+        "symbol":       symbol,
+        "volume":       volume,
+        "type":         close_type,
+        "price":        close_price,
+        "position":     ticket,
+        "deviation":    _EMERGENCY_CLOSE_DEVIATION,
+        "magic":        cfg.MAGIC_NUMBER,
+        "comment":      comment[:31],
+        "type_time":    mt5.ORDER_TIME_GTC,
+        "type_filling": mt5.ORDER_FILLING_IOC,
+    }
+    result = mt5.order_send(request)
+    if result.retcode == mt5.TRADE_RETCODE_DONE:
+        log.warning(
+            f"[close_market] ✅ Posición #{ticket} {symbol} cerrada ({comment})"
+        )
+        return True
+    log.error(
+        f"[close_market] ❌ Error cerrando #{ticket} {symbol}: "
+        f"{result.comment} (retcode={result.retcode})"
+    )
+    return False
+
+
 # ════════════════════════════════════════════════════════════════
 #  FIX 6: CÁLCULO DE PIPS POR INSTRUMENTO
 # ════════════════════════════════════════════════════════════════
@@ -1404,6 +1458,10 @@ tp_alerted:   set = set()
 
 def manage_positions(positions: list, ind_by_sym: dict):
     global last_action
+    # Obtener balance actual para el circuit breaker
+    acc_info = mt5.account_info()
+    balance  = float(acc_info.balance) if acc_info else 0.0
+
     for pos in positions:
         ticket = pos["ticket"]
         symbol = pos["symbol"]
@@ -1411,6 +1469,16 @@ def manage_positions(positions: list, ind_by_sym: dict):
         tp     = pos["tp"]
         profit = pos["profit"]
         sym_cfg_data = cfg.SYMBOLS.get(symbol, {})
+
+        # ── Circuit Breaker individual (Cisne Negro) ──────────────
+        cb_triggered, cb_reason = check_circuit_breaker(pos, balance)
+        if cb_triggered:
+            log.warning(f"[circuit_breaker] {cb_reason} — cerrando emergencia")
+            closed = close_position_market(pos, comment="CB-emergency")
+            if closed:
+                last_action = f"🚨 CB {symbol} #{ticket}"
+                telegram_send(f"🚨 <b>CIRCUIT BREAKER</b>\n{cb_reason}")
+            continue   # no gestionar trailing en esta posición
 
         # FIX 11: trailing stop progresivo (reemplaza _check_breakeven)
         _manage_trailing_stop(pos, sym_cfg_data)
@@ -2230,6 +2298,16 @@ def _execute_decision(
         avg_rr=rr,
         n_trades=sym_trades,
     )
+
+    # ── Modo Calentamiento: reducir lote durante cold start ──────
+    if getattr(mem_check, "warmup_mode", False):
+        warmup_factor = float(getattr(cfg, "WARMUP_LOT_FACTOR", 0.5))
+        original_vol  = vol
+        vol = max(0.01, round(vol * warmup_factor, 2))
+        log.info(
+            f"[warmup] {symbol}: lote reducido {original_vol} → {vol} "
+            f"(factor={warmup_factor}, trades={sym_trades})"
+        )
 
     hilbert  = ind.get("hilbert", {})
     h_signal = hilbert.get("signal", "NEUTRAL")
