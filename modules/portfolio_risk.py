@@ -23,24 +23,36 @@ import config as cfg
 
 log = logging.getLogger(__name__)
 
+# ── Sufijo del broker ────────────────────────────────────────────
+_S = cfg.BROKER_SUFFIX
+_NO_SUFFIX_PR = getattr(cfg, "_NO_SUFFIX", {"USTEC", "DE40"})
+
+
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in _NO_SUFFIX_PR:
+        return base
+    return f"{base}{_S}"
+
+
 # ── Matriz de correlación estática entre pares ───────────────────
 # Valores basados en correlaciones históricas promedio (5 años).
 # Solo se registran pares con |ρ| ≥ 0.60; el resto se asume ρ = 0.
 CORRELATION_MATRIX = {
     # Forex majors
-    ("EURUSDm", "GBPUSDm"):  0.82,
-    ("EURUSDm", "EURJPYm"):  0.78,
-    ("GBPUSDm", "GBPJPYm"):  0.85,
-    ("EURUSDm", "USDJPYm"): -0.65,
-    ("GBPUSDm", "USDJPYm"): -0.60,
-    ("EURJPYm", "GBPJPYm"):  0.90,
+    (_sym("EURUSD"), _sym("GBPUSD")):  0.82,
+    (_sym("EURUSD"), _sym("EURJPY")):  0.78,
+    (_sym("GBPUSD"), _sym("GBPJPY")):  0.85,
+    (_sym("EURUSD"), _sym("USDJPY")): -0.65,
+    (_sym("GBPUSD"), _sym("USDJPY")): -0.60,
+    (_sym("EURJPY"), _sym("GBPJPY")):  0.90,
     # Índices americanos
-    ("US500m",  "USTEC"):     0.93,
+    (_sym("US500"),  _sym("USTEC")):   0.93,
     # Metales
-    ("XAUUSDm", "XAGUSDm"):  0.85,
+    (_sym("XAUUSD"), _sym("XAGUSD")): 0.85,
     # Índices vs metales (baja pero relevante en crisis)
-    ("XAUUSDm", "US500m"):  -0.30,
-    ("XAUUSDm", "USTEC"):   -0.25,
+    (_sym("XAUUSD"), _sym("US500")): -0.30,
+    (_sym("XAUUSD"), _sym("USTEC")): -0.25,
 }
 
 # Umbral máximo de riesgo efectivo del portafolio (% del balance).

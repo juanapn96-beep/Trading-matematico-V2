@@ -35,11 +35,19 @@ def _require_env(name: str) -> str:
 
 
 # ================================================================
-#  MT5 / EXNESS
+#  MT5 / BROKER
 # ================================================================
 MT5_LOGIN    = int(_require_env("MT5_LOGIN"))
 MT5_PASSWORD = _require_env("MT5_PASSWORD")
 MT5_SERVER   = os.environ.get("MT5_SERVER", "Exness-MT5Trial11")
+
+# Sufijo de símbolo del broker.  Exness usa "m" (XAUUSDm, EURUSDm…).
+# IC Markets usa "" vacío (XAUUSD, EURUSD…).  Cambia en el .env para migrar.
+# Nota: USTEC y DE40 en Exness no llevan sufijo; mantenlos en _NO_SUFFIX.
+BROKER_SUFFIX = os.environ.get("BROKER_SUFFIX", "m")
+
+# Símbolos que NO llevan el sufijo en ningún broker (por convención del feed).
+_NO_SUFFIX = {"USTEC", "DE40"}
 
 # ================================================================
 #  GROQ
@@ -61,13 +69,21 @@ TELEGRAM_CHAT_ID = _require_env("TELEGRAM_CHAT_ID")
 ALPHA_VANTAGE_KEY = _require_env("ALPHA_VANTAGE_KEY")
 FINNHUB_KEY       = _require_env("FINNHUB_KEY")
 
+
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in _NO_SUFFIX:
+        return base
+    return f"{base}{BROKER_SUFFIX}"
+
+
 # ================================================================
 #  SÍMBOLOS — 12 ACTIVOS, SESIONES EXPANDIDAS 24/5
 # ================================================================
 SYMBOLS = {
 
     # ── 1. ORO — 24/5 ──────────────────────────────────────────
-    "XAUUSDm": {
+    _sym("XAUUSD"): {
         "name":           "Oro (Gold)",
         "currencies":     ["USD"],
         "strategy_type":  "VOLATILITY_CYCLE",
@@ -106,7 +122,7 @@ SYMBOLS = {
     },
 
     # ── 2. S&P 500 — ampliado ──────────────────────────────────
-    "US500m": {
+    _sym("US500"): {
         "name":           "S&P 500",
         "currencies":     ["USD"],
         "strategy_type":  "MOMENTUM_TREND",
@@ -144,7 +160,7 @@ SYMBOLS = {
     },
 
     # ── 3. EUR/USD — 24/5 ──────────────────────────────────────
-    "EURUSDm": {
+    _sym("EURUSD"): {
         "name":           "Euro / Dólar",
         "currencies":     ["EUR", "USD"],
         "strategy_type":  "CYCLE_REVERSION",
@@ -180,7 +196,7 @@ SYMBOLS = {
     },
 
     # ── 4. GBP/USD — 24/5 ──────────────────────────────────────
-    "GBPUSDm": {
+    _sym("GBPUSD"): {
         "name":           "Libra / Dólar (Cable)",
         "currencies":     ["GBP", "USD"],
         "strategy_type":  "MOMENTUM_SURGE",
@@ -216,7 +232,7 @@ SYMBOLS = {
     },
 
     # ── 5. USD/JPY — 24/5 ──────────────────────────────────────
-    "USDJPYm": {
+    _sym("USDJPY"): {
         "name":           "Dólar / Yen (Ninja)",
         "currencies":     ["USD", "JPY"],
         "strategy_type":  "TREND_KALMAN",
@@ -252,7 +268,7 @@ SYMBOLS = {
     },
 
     # ── 6. GBP/JPY — 24/5, con cautela extra ───────────────────
-    "GBPJPYm": {
+    _sym("GBPJPY"): {
         "name":           "Libra / Yen (El Dragón)",
         "currencies":     ["GBP", "JPY"],
         "strategy_type":  "DRAGON_EXPLOSION",
@@ -287,7 +303,7 @@ SYMBOLS = {
     },
 
     # ── 7. XAG/USD — 24/5 ──────────────────────────────────────
-    "XAGUSDm": {
+    _sym("XAGUSD"): {
         "name":           "Plata / Dólar (Silver)",
         "currencies":     ["USD"],
         "strategy_type":  "GOLD_BETA_REVERSION",
@@ -322,7 +338,7 @@ SYMBOLS = {
     },
 
     # ── 8. WTI CRUDE OIL — casi 24/5 ───────────────────────────
-    "USOILm": {
+    _sym("USOIL"): {
         "name":           "Petróleo WTI (Crude Oil)",
         "currencies":     ["USD"],
         "strategy_type":  "RANGE_BREAKOUT_OIL",
@@ -358,7 +374,7 @@ SYMBOLS = {
     },
 
     # ── 9. NASDAQ 100 — ampliado ────────────────────────────────
-    "USTEC": {
+    _sym("USTEC"): {
         "name":           "Nasdaq 100",
         "currencies":     ["USD"],
         "strategy_type":  "TECH_MOMENTUM",
@@ -395,7 +411,7 @@ SYMBOLS = {
     },
 
     # ── 10. DAX 40 — ampliado ───────────────────────────────────
-    "DE40": {
+    _sym("DE40"): {
         "name":           "DAX 40 (Alemania)",
         "currencies":     ["EUR"],
         "strategy_type":  "FRANKFURT_BREAKOUT",
@@ -433,7 +449,7 @@ SYMBOLS = {
     },
 
     # ── 11. EUR/JPY — 24/5 ─────────────────────────────────────
-    "EURJPYm": {
+    _sym("EURJPY"): {
         "name":           "Euro / Yen (Yuro)",
         "currencies":     ["EUR", "JPY"],
         "strategy_type":  "RISK_CARRY",
@@ -467,7 +483,7 @@ SYMBOLS = {
     },
 
     # ── 12. BITCOIN — 24/7 ─────────────────────────────────────
-    "BTCUSDm": {
+    _sym("BTCUSD"): {
         "name":           "Bitcoin / Dólar",
         "currencies":     ["USD"],
         "strategy_type":  "CRYPTO_WAVE",
@@ -519,6 +535,22 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
 SYMBOL_COOLDOWN_SEC = 180
+
+# ── Circuit Breaker individual de posición (Cisne Negro) ─────────
+# Si el drawdown de una posición abierta supera este % del balance,
+# se ejecuta un cierre forzado de emergencia independiente del SL/TP.
+# 3.0% = cerrar si la posición pierde más del 3% del balance total.
+# 0.0 = desactivado.
+CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT = float(
+    os.environ.get("CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT", "3.0")
+)
+
+# ── Modo Calentamiento (Cold-Start Mitigation) ───────────────────
+# Mientras el bot tenga menos de WARMUP_TRADE_COUNT trades en memoria,
+# opera en "Modo Calentamiento": lot reducido + filtros más estrictos.
+# Configurable vía .env para ajuste sin tocar el código.
+WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "100")))
+WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "0.5"))
 
 # Tiempo de espera entre iteraciones del ciclo principal (segundos)
 LOOP_SLEEP_SEC      = 30

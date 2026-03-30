@@ -197,6 +197,7 @@ class MemoryCheck:
     mlp_score:       float = 0.0    # score de la red neuronal (0→1 = probabilidad pérdida)
     regime:          str   = "UNKNOWN"
     ensemble_detail: str   = ""
+    warmup_mode:     bool  = False  # True cuando total_trades < MLP_ACTIVATION (cold start)
 
 
 @dataclass
@@ -1487,6 +1488,22 @@ def check_memory(
         w_reg * regime_score
     )
 
+    # ── Modo Calentamiento (Cold Start) ──────────────────────────
+    # Si no hay suficientes datos globales, endurecer filtros de coseno.
+    warmup_trade_count = getattr(cfg, "WARMUP_TRADE_COUNT", MLP_ACTIVATION)
+    warmup_mode = total_trades < warmup_trade_count
+    if warmup_mode:
+        # En warmup: endurecer el bloqueo por coseno (bajar umbral de ensemble)
+        # y forzar bloqueo si el régimen no es favorable
+        if regime not in ("TRENDING_UP", "TRENDING_DOWN"):
+            if ensemble_score > 0.55:
+                should_block = True
+                cosine_warnings.append(
+                    f"⚠️ Modo Calentamiento ({total_trades}/{warmup_trade_count} trades)"
+                )
+        if regime == "CHAOTIC":
+            should_block = True
+
     # ── Decisión final ────────────────────────────────────────────
 
     # Anti-parálisis: si wins > losses en patrones similares → reducir penalización
@@ -1502,7 +1519,7 @@ def check_memory(
         confidence_adj += 1.0   # MLP dice baja probabilidad de pérdida
 
     # Bloqueo basado en ensemble score + cantidad mínima de trades
-    should_block = (
+    should_block = should_block or (
         ensemble_score > 0.72 and
         cosine_losses >= min_trades and
         cosine_wins < cosine_losses * 0.5
@@ -1520,6 +1537,8 @@ def check_memory(
     ]
     if mlp_active:
         detail_parts.append(f"MLP: {mlp_score:.2f} ({mlp.trained_samples}sp)")
+    if warmup_mode:
+        detail_parts.append(f"WARMUP ({total_trades}/{warmup_trade_count})")
     detail_parts.append(f"Ensemble: {ensemble_score:.2f}")
     ensemble_detail = " | ".join(detail_parts)
 
@@ -1529,7 +1548,7 @@ def check_memory(
 
     log.debug(
         f"[brain] {symbol} {direction}: "
-        f"block={should_block} | {ensemble_detail}"
+        f"block={should_block} warmup={warmup_mode} | {ensemble_detail}"
     )
 
     return MemoryCheck(
@@ -1541,6 +1560,7 @@ def check_memory(
         mlp_score      = float(mlp_score),
         regime         = regime,
         ensemble_detail= ensemble_detail,
+        warmup_mode    = warmup_mode,
     )
 
 
