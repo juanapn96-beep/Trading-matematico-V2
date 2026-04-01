@@ -690,6 +690,16 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
             f"sin zona fuerte ni confluencia premium ({conf_total:+.2f})"
         ), plan
 
+    # SCALPING_ONLY: exige señal Hilbert en extremo de ciclo antes de consultar Groq.
+    # Esto reduce drásticamente las llamadas a la API: Groq sólo se invoca cuando
+    # el precio está en LOCAL_MIN (entrada BUY scalp) o LOCAL_MAX (entrada SELL scalp),
+    # condición que ocurre muy poco frecuente en comparación con el resto del ciclo.
+    if bool(getattr(cfg, "SCALPING_ONLY", False)) and not hilbert_extreme_ok:
+        return False, (
+            f"⏳ Scalp: esperando extremo Hilbert {action} "
+            f"(actual={hilbert_signal})"
+        ), plan
+
     return True, "", plan
 
 # ════════════════════════════════════════════════════════════════
@@ -2598,7 +2608,7 @@ def _execute_decision(
     sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
     min_hurst = float(sym_cfg.get("min_hurst", 0.40) or 0.40)
     hurst_val = float(ind.get("hurst", 0.5) or 0.5)
-    is_scalp_trade = bool(hurst_val < min_hurst)
+    is_scalp_trade = bool(getattr(cfg, "SCALPING_ONLY", False)) or bool(hurst_val < min_hurst)
     if is_scalp_trade:
         scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.82) or 0.82)
         scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
