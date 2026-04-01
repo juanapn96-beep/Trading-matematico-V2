@@ -1571,10 +1571,10 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     if scalp_mode:
         gained_pips = _price_distance_to_pips(symbol, profit_price)
         stage_definitions = [
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4", 25.0)), 0.70, 5, "Scalp lock 70%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3", 18.0)), 0.50, 4, "Scalp lock 50%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2", 12.0)), 0.30, 3, "Scalp lock 30%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1", 7.0)), 0.15, 2, "Scalp lock 15%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3, "Scalp lock 30%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2, "Scalp lock 15%"),
         ]
         lock_pct = 0.0
         new_stage = 1

@@ -126,7 +126,7 @@ SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "7.0
 SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
 SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
 SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
-CLOSURE_HISTORY_LOOKBACK_DAYS = int(float(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30))
+CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================
 #  TELEGRAM
