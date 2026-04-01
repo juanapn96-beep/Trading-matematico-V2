@@ -1539,24 +1539,34 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
         return
     profit_price = abs(cur_p - open_p)
 
-    if candle_stamp and _profit_candle_last_seen.get(ticket) != candle_stamp:
-        _profit_candle_count[ticket] = _profit_candle_count.get(ticket, 0) + 1
-        _profit_candle_last_seen[ticket] = candle_stamp
-    if _profit_candle_count[ticket] < 2:
-        return
-
+    # Obtener trade_mode primero para saber si es scalp ANTES de aplicar los gates
     trade_mode = trade_mode_cache.get(ticket)
     if not trade_mode:
         trade_mode = get_adaptive_trail_params(sym_cfg, direction)
         trade_mode_cache[ticket] = trade_mode
 
+    scalp_mode = bool(trade_mode.get("scalp_mode", False))
     be_atr_mult = float(trade_mode.get("be_atr_mult", sym_cfg.get("be_atr_mult", 2.0)))
     be_buffer_mult = float(trade_mode.get("be_buffer_mult", 0.5))
-    be_threshold_price = atr_val * be_atr_mult
-    if profit_price < be_threshold_price:
-        return
 
-    scalp_mode = bool(trade_mode.get("scalp_mode", False))
+    if scalp_mode:
+        # SCALP MODE: activar BE basado en pips ganados, ignorar conteo de velas H1 y
+        # umbral be_atr_mult×ATR(H1) — ambos son inapropiados para trades de M1
+        # (el conteo de velas H1 tarda 2+ horas; el ATR H1 es 60-100 pips en EURUSD)
+        gained_pips = _price_distance_to_pips(symbol, profit_price)
+        min_be_pips = float(getattr(cfg, "SCALPING_BE_MIN_PIPS", 2.0))
+        if gained_pips < min_be_pips:
+            return
+    else:
+        # MODO NORMAL: esperar 2+ velas H1 en ganancia y superar umbral ATR
+        if candle_stamp and _profit_candle_last_seen.get(ticket) != candle_stamp:
+            _profit_candle_count[ticket] = _profit_candle_count.get(ticket, 0) + 1
+            _profit_candle_last_seen[ticket] = candle_stamp
+        if _profit_candle_count.get(ticket, 0) < 2:
+            return
+        be_threshold_price = atr_val * be_atr_mult
+        if profit_price < be_threshold_price:
+            return
     if tp != 0:
         tp_total = abs(tp - open_p)
         if direction == "BUY":
@@ -1569,7 +1579,7 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     tp_progress = max(0.0, min(1.0, tp_progress))
 
     if scalp_mode:
-        gained_pips = _price_distance_to_pips(symbol, profit_price)
+        # gained_pips ya está calculado en el gate anterior
         stage_definitions = [
             (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
             (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
@@ -1635,17 +1645,31 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
 
         if prev_stage < 1:
             notify_breakeven(symbol, ticket, new_sl, profit_pts)
-            log.info(
-                f"[Trail] 🛡 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | profit_cycles={_profit_candle_count[ticket]} "
-                f"| TP%={tp_progress:.0%} | SL→{new_sl:.5f}"
-            )
+            if scalp_mode:
+                log.info(
+                    f"[Trail] 🛡 #{ticket} {symbol} {direction} "
+                    f"— {stage_label} | pips={gained_pips:.1f} "
+                    f"| TP%={tp_progress:.0%} | SL→{new_sl:.5f}"
+                )
+            else:
+                log.info(
+                    f"[Trail] 🛡 #{ticket} {symbol} {direction} "
+                    f"— {stage_label} | profit_cycles={_profit_candle_count.get(ticket, 0)} "
+                    f"| TP%={tp_progress:.0%} | SL→{new_sl:.5f}"
+                )
         else:
-            log.info(
-                f"[Trail] 📈 #{ticket} {symbol} {direction} "
-                f"— {stage_label} | cycles={_profit_candle_count[ticket]} | "
-                f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
-            )
+            if scalp_mode:
+                log.info(
+                    f"[Trail] 📈 #{ticket} {symbol} {direction} "
+                    f"— {stage_label} | pips={gained_pips:.1f} | "
+                    f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
+                )
+            else:
+                log.info(
+                    f"[Trail] 📈 #{ticket} {symbol} {direction} "
+                    f"— {stage_label} | cycles={_profit_candle_count.get(ticket, 0)} | "
+                    f"lock={locked_pts:.0f}pts | SL→{new_sl:.5f} | TP%={tp_progress:.0%}"
+                )
 
         last_action = f"Trail {stage_label} #{ticket} {symbol} lock={locked_pts:.0f}pts"
 
