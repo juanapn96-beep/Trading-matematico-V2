@@ -121,6 +121,12 @@ ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.20") or 1.20)
 SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
 SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
 SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
+SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.82") or 0.82)
+SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "7.0") or 7.0)
+SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
+SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
+SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
+CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================
 #  TELEGRAM

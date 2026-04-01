@@ -155,6 +155,7 @@ daily_trades_log: list = []
 trade_mode_cache: dict = {}
 _profit_candle_count: dict = {}
 _profit_candle_last_seen: dict = {}
+pending_closure_tickets: set = set()
 last_groq_analysis: dict = {}
 web_status_snapshot: dict = {}
 state_lock = threading.RLock()
@@ -1486,6 +1487,18 @@ def _calc_pips_instrument(deal, symbol: str) -> float:
     return round(profit / pip_value, 1) if pip_value != 0 else 0.0
 
 
+def _price_distance_to_pips(symbol: str, price_distance: float) -> float:
+    sym_info = mt5.symbol_info(symbol)
+    if sym_info is None:
+        return 0.0
+    tick_sz = float(getattr(sym_info, "trade_tick_size", 0) or 0)
+    point = float(getattr(sym_info, "point", 0) or 0)
+    pip_size = tick_sz * 10 if tick_sz > 0 else point * 10
+    if pip_size <= 0:
+        return 0.0
+    return max(0.0, float(price_distance) / pip_size)
+
+
 # ════════════════════════════════════════════════════════════════
 #  FIX 11 — TRAILING STOP PROGRESIVO (reemplaza _check_breakeven)
 # ════════════════════════════════════════════════════════════════
@@ -1543,6 +1556,7 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     if profit_price < be_threshold_price:
         return
 
+    scalp_mode = bool(trade_mode.get("scalp_mode", False))
     if tp != 0:
         tp_total = abs(tp - open_p)
         if direction == "BUY":
@@ -1554,22 +1568,40 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
         tp_progress = 0.0
     tp_progress = max(0.0, min(1.0, tp_progress))
 
-    stage_definitions = [
-        (0.85, 0.70, 5, "Lock 70%"),
-        (0.70, 0.50, 4, "Lock 50%"),
-        (0.50, 0.35, 3, "Lock 35%"),
-        (0.30, 0.15, 2, "Lock 15%"),
-    ]
+    if scalp_mode:
+        gained_pips = _price_distance_to_pips(symbol, profit_price)
+        stage_definitions = [
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3, "Scalp lock 30%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2, "Scalp lock 15%"),
+        ]
+        lock_pct = 0.0
+        new_stage = 1
+        stage_label = "Scalp BE buffer"
+        for min_pips, pct, stage_num, label in stage_definitions:
+            if gained_pips >= min_pips:
+                lock_pct = pct
+                new_stage = stage_num
+                stage_label = label
+                break
+    else:
+        stage_definitions = [
+            (0.85, 0.70, 5, "Lock 70%"),
+            (0.70, 0.50, 4, "Lock 50%"),
+            (0.50, 0.35, 3, "Lock 35%"),
+            (0.30, 0.15, 2, "Lock 15%"),
+        ]
 
-    lock_pct = 0.0
-    new_stage = 1
-    stage_label = "BE buffer"
-    for min_progress, pct, stage_num, label in stage_definitions:
-        if tp_progress >= min_progress:
-            lock_pct = pct
-            new_stage = stage_num
-            stage_label = label
-            break
+        lock_pct = 0.0
+        new_stage = 1
+        stage_label = "BE buffer"
+        for min_progress, pct, stage_num, label in stage_definitions:
+            if tp_progress >= min_progress:
+                lock_pct = pct
+                new_stage = stage_num
+                stage_label = label
+                break
 
     if lock_pct > 0:
         locked_profit = profit_price * lock_pct
@@ -1729,13 +1761,33 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
     current_tickets = {p["ticket"] for p in open_positions_now}
     closed          = open_tickets_before - current_tickets
     if not closed:
-        return
+        return set()
 
-    from_time = datetime.now(timezone.utc) - timedelta(hours=24)
-    history   = mt5.history_deals_get(from_time, datetime.now(timezone.utc))
+    pending = get_pending_trades()
+    pending_by_ticket = {int(p["ticket"]): p for p in pending}
+    now_utc = datetime.now(timezone.utc)
+    from_time = now_utc - timedelta(hours=24)
+    for ticket in closed:
+        trade_info = pending_by_ticket.get(int(ticket))
+        opened_at_str = trade_info.get("opened_at") if trade_info else None
+        if not opened_at_str:
+            continue
+        try:
+            opened_at = datetime.fromisoformat(opened_at_str)
+            if opened_at.tzinfo is None:
+                opened_at = opened_at.replace(tzinfo=timezone.utc)
+            from_time = min(from_time, opened_at - timedelta(hours=1))
+        except Exception:
+            continue
+    max_lookback_days = int(getattr(cfg, "CLOSURE_HISTORY_LOOKBACK_DAYS", 30) or 30)
+    earliest_allowed = now_utc - timedelta(days=max_lookback_days)
+    if from_time < earliest_allowed:
+        from_time = earliest_allowed
+
+    history = mt5.history_deals_get(from_time, now_utc)
     if history is None:
         log.warning("[closures] No se pudo obtener historial de deals de MT5")
-        return
+        return set(closed)
 
     closing_deals: dict = {}
     for d in history:
@@ -1744,6 +1796,7 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
             if pid not in closing_deals or d.time > closing_deals[pid].time:
                 closing_deals[pid] = d
 
+    unresolved_tickets = set()
     for ticket in closed:
         _trail_stage.pop(ticket, None)
         trade_mode_cache.pop(ticket, None)
@@ -1753,17 +1806,14 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
 
         if deal is None:
             for d in history:
-                if int(d.position_id) == ticket and d.entry == 1:
+                if int(d.position_id) == ticket and d.entry in (1, 3):
                     deal = d
-                    break
+                    if d.entry == 1:
+                        break
 
         if deal is None:
             log.warning(f"[closures] No se encontró deal de cierre para ticket #{ticket}")
-            update_trade_result(
-                ticket=ticket, close_price=0.0,
-                profit=0.0, pips=0.0,
-                result="UNKNOWN", duration_min=0,
-            )
+            unresolved_tickets.add(ticket)
             continue
 
         profit   = (float(deal.profit)
@@ -1783,10 +1833,10 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
         else:
             result = "BE"  # Ganancia/pérdida menor a $1 = breakeven
 
-        pending       = get_pending_trades()
-        trade_info    = next((p for p in pending if p["ticket"] == ticket), None)
+        trade_info    = pending_by_ticket.get(int(ticket))
         opened_at_str = trade_info["opened_at"] if trade_info else None
         open_price    = trade_info.get("open_price", close_px) if trade_info else close_px
+        direction = trade_info.get("direction", direction) if trade_info else direction
         duration_min  = 0
         if opened_at_str:
             try:
@@ -1840,6 +1890,7 @@ def watch_closures(open_tickets_before: set, open_positions_now: list):
         be_activated.discard(ticket)
         tp_alerted.discard(ticket)
         tickets_en_memoria.discard(ticket)
+    return unresolved_tickets
 
 
 # ════════════════════════════════════════════════════════════════
@@ -2521,6 +2572,16 @@ def _execute_decision(
         return
     price  = tick.ask if action == "BUY" else tick.bid
     sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
+    min_hurst = float(sym_cfg.get("min_hurst", 0.40) or 0.40)
+    hurst_val = float(ind.get("hurst", 0.5) or 0.5)
+    is_scalp_trade = bool(hurst_val < min_hurst)
+    if is_scalp_trade:
+        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.82) or 0.82)
+        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
+        if action == "BUY":
+            tp = round(price + ((tp - price) * scalp_tp_mult), 5)
+        else:
+            tp = round(price - ((price - tp) * scalp_tp_mult), 5)
 
     rr = get_rr(price, sl, tp)
     min_rr = _get_entry_min_rr(sym_cfg)
@@ -2602,7 +2663,9 @@ def _execute_decision(
     _trail_stage[ticket] = 0
     _profit_candle_count[ticket] = 0
     _profit_candle_last_seen[ticket] = None
-    trade_mode_cache[ticket] = get_adaptive_trail_params(sym_cfg, action)
+    trade_mode = get_adaptive_trail_params(sym_cfg, action)
+    trade_mode["scalp_mode"] = is_scalp_trade
+    trade_mode_cache[ticket] = trade_mode
 
     direction_features = build_features(symbol, action, ind, sr_ctx, news_ctx, sym_cfg)
     setup_id = derive_setup_id(ind, action)
@@ -2668,6 +2731,7 @@ def _execute_decision(
 def run():
     global cycle_count, last_action, ind_cache, sr_cache, symbol_status_cache, daily_start_balance
     global daily_loss_guard_notified
+    global pending_closure_tickets
 
     log.info("🚀 ZAR ULTIMATE BOT v6.5 — TRAILING STOP + WR FIX — Iniciando...")
     init_db()
@@ -2741,7 +2805,8 @@ def run():
 
             open_positions = get_open_positions()
             open_tickets   = {p["ticket"] for p in open_positions}
-            watch_closures(tickets_en_memoria.copy(), open_positions)
+            tickets_before = tickets_en_memoria.copy() | pending_closure_tickets
+            pending_closure_tickets = watch_closures(tickets_before, open_positions)
             tickets_en_memoria.clear()
             tickets_en_memoria.update(open_tickets)
 
