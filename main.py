@@ -89,7 +89,18 @@ logging.basicConfig(
 log = logging.getLogger(__name__)
 
 # ── Groq ────────────────────────────────────────────────────────
-groq_client = Groq(api_key=cfg.GROQ_API_KEY)
+def _build_groq_client(api_key: str):
+    max_retries = int(getattr(cfg, "GROQ_CLIENT_MAX_RETRIES", 0) or 0)
+    try:
+        return Groq(api_key=api_key, max_retries=max_retries)
+    except TypeError:
+        return Groq(api_key=api_key)
+
+
+groq_clients = [
+    _build_groq_client(api_key)
+    for api_key in getattr(cfg, "GROQ_API_KEYS", [cfg.GROQ_API_KEY])
+]
 
 # ── TF Map MT5 ───────────────────────────────────────────────────
 TF_MAP = {
@@ -130,7 +141,7 @@ symbol_status_cache: dict  = {}
 symbol_detail_cache: dict  = {}  # FASE 12: {symbol: {enhanced_regime: str, regime_confidence: "HIGH"|"MEDIUM"|"LOW", z_score: float|None}}
 
 news_pause_notified:   dict = {}
-memory_block_notified: dict = {}
+memory_block_notified: dict = {}  # {symbol: {"ts": float, "fingerprint": str}}
 equity_guard_notified: dict = {}
 daily_loss_guard_notified: float = 0.0
 NOTIF_COOLDOWN_SEC = 1800
@@ -149,6 +160,9 @@ web_status_snapshot: dict = {}
 state_lock = threading.RLock()
 groq_cooldown_until: float = 0.0
 groq_call_cache: dict = {}
+groq_key_cooldowns: dict = {}
+groq_symbol_cooldowns: dict = {}
+groq_key_cursor: int = 0
 groq_usage_stats: dict = {
     "api_calls_total": 0,
     "api_success_total": 0,
@@ -156,12 +170,16 @@ groq_usage_stats: dict = {
     "skipped_by_gate_total": 0,
     "skipped_by_budget_total": 0,
     "cooldown_skips_total": 0,
+    "symbol_cooldown_skips_total": 0,
     "quota_hits_total": 0,
     "fallback_holds_total": 0,
     "errors_total": 0,
+    "key_rotations_total": 0,
 }
 groq_hourly_usage: dict = {}
 groq_daily_usage: dict = {}
+groq_hourly_usage_by_key: dict = {}
+groq_daily_usage_by_key: dict = {}
 shared_news_cache = None
 shared_news_last_update: float = 0.0
 
@@ -187,7 +205,7 @@ def _set_last_groq_analysis(symbol: str, analysis: Optional[dict]):
         }
 
 
-def _bump_groq_metric(metric: str):
+def _bump_groq_metric(metric: str, key_idx: Optional[int] = None):
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
@@ -196,6 +214,11 @@ def _bump_groq_metric(metric: str):
         if metric == "api_calls_total":
             groq_hourly_usage[hour_key] = int(groq_hourly_usage.get(hour_key, 0)) + 1
             groq_daily_usage[day_key] = int(groq_daily_usage.get(day_key, 0)) + 1
+            if key_idx is not None:
+                hourly_by_key = groq_hourly_usage_by_key.setdefault(key_idx, {})
+                daily_by_key = groq_daily_usage_by_key.setdefault(key_idx, {})
+                hourly_by_key[hour_key] = int(hourly_by_key.get(hour_key, 0)) + 1
+                daily_by_key[day_key] = int(daily_by_key.get(day_key, 0)) + 1
 
             while len(groq_hourly_usage) > 72:
                 oldest = sorted(groq_hourly_usage.keys())[0]
@@ -203,6 +226,13 @@ def _bump_groq_metric(metric: str):
             while len(groq_daily_usage) > 14:
                 oldest = sorted(groq_daily_usage.keys())[0]
                 groq_daily_usage.pop(oldest, None)
+            if key_idx is not None:
+                while len(groq_hourly_usage_by_key.get(key_idx, {})) > 72:
+                    oldest = sorted(groq_hourly_usage_by_key[key_idx].keys())[0]
+                    groq_hourly_usage_by_key[key_idx].pop(oldest, None)
+                while len(groq_daily_usage_by_key.get(key_idx, {})) > 14:
+                    oldest = sorted(groq_daily_usage_by_key[key_idx].keys())[0]
+                    groq_daily_usage_by_key[key_idx].pop(oldest, None)
 
 
 def _get_groq_metrics_snapshot() -> dict:
@@ -214,6 +244,8 @@ def _get_groq_metrics_snapshot() -> dict:
             **groq_usage_stats,
             "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
             "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
+            "configured_keys": len(groq_clients),
+            "per_key_budget": _format_groq_key_budget_status(),
             "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
         }
 
@@ -226,8 +258,41 @@ def _get_groq_metrics_snapshot_unlocked() -> dict:
         **groq_usage_stats,
         "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
         "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
+        "configured_keys": len(groq_clients),
+        "per_key_budget": _format_groq_key_budget_status(),
         "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
     }
+
+
+def _get_groq_key_usage_snapshot(key_idx: int) -> tuple:
+    now = datetime.now(timezone.utc)
+    hour_key = now.strftime("%Y-%m-%d %H")
+    day_key = now.strftime("%Y-%m-%d")
+    with state_lock:
+        hour_calls = int(groq_hourly_usage_by_key.get(key_idx, {}).get(hour_key, 0))
+        day_calls = int(groq_daily_usage_by_key.get(key_idx, {}).get(day_key, 0))
+    return hour_calls, day_calls
+
+
+def _is_groq_key_budget_available(key_idx: int) -> tuple:
+    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
+    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
+    hour_calls, day_calls = _get_groq_key_usage_snapshot(key_idx)
+    hour_ok = max_calls_hour <= 0 or hour_calls < max_calls_hour
+    day_ok = max_calls_day <= 0 or day_calls < max_calls_day
+    return (hour_ok and day_ok), hour_calls, day_calls
+
+
+def _format_groq_key_budget_status() -> str:
+    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
+    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
+    parts = []
+    for key_idx in range(len(groq_clients)):
+        hour_calls, day_calls = _get_groq_key_usage_snapshot(key_idx)
+        hour_limit = max_calls_hour if max_calls_hour > 0 else "-"
+        day_limit = max_calls_day if max_calls_day > 0 else "-"
+        parts.append(f"k{key_idx+1}:h {hour_calls}/{hour_limit}, d {day_calls}/{day_limit}")
+    return " | ".join(parts) if parts else "sin keys"
 
 
 def _build_groq_fallback_decision(reason: str) -> dict:
@@ -397,6 +462,48 @@ def _build_groq_cache_key(symbol: str, direction_hint: str, candle_stamp: str, i
     ])
 
 
+def _get_groq_symbol_cooldown_remaining(symbol: str, now_ts: Optional[float] = None) -> int:
+    now_ts = time.time() if now_ts is None else now_ts
+    until_ts = float(groq_symbol_cooldowns.get(symbol, 0.0) or 0.0)
+    if until_ts <= now_ts:
+        groq_symbol_cooldowns.pop(symbol, None)
+        return 0
+    return int(max(1, math.ceil(until_ts - now_ts)))
+
+
+def _set_groq_symbol_cooldown(symbol: str, seconds: Optional[float] = None):
+    cooldown_sec = int(
+        seconds
+        if seconds is not None
+        else (getattr(cfg, "GROQ_SYMBOL_COOLDOWN_SEC", 0) or 0)
+    )
+    if cooldown_sec <= 0:
+        return
+    groq_symbol_cooldowns[symbol] = time.time() + cooldown_sec
+
+
+def _select_groq_client(now_ts: float, excluded: Optional[set] = None):
+    global groq_key_cursor
+    excluded = excluded or set()
+    if not groq_clients:
+        return None, None
+
+    total = len(groq_clients)
+    for offset in range(total):
+        idx = (groq_key_cursor + offset) % total
+        if idx in excluded:
+            continue
+        budget_ok, _, _ = _is_groq_key_budget_available(idx)
+        if not budget_ok:
+            continue
+        cooldown_until = float(groq_key_cooldowns.get(idx, 0.0) or 0.0)
+        if cooldown_until > now_ts:
+            continue
+        groq_key_cursor = (idx + 1) % total
+        return idx, groq_clients[idx]
+    return None, None
+
+
 def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> Optional[dict]:
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
@@ -411,6 +518,39 @@ def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> O
         "tp": tp,
         "rr": rr,
     }
+
+
+def _get_entry_min_rr(sym_cfg: dict) -> float:
+    return float(sym_cfg.get("min_rr", getattr(cfg, "ENTRY_MIN_RR", 1.20)) or getattr(cfg, "ENTRY_MIN_RR", 1.20))
+
+
+def _should_allow_low_hurst_scalp(ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
+    hurst_val = float(ind.get("hurst", 0.5) or 0.5)
+    min_hurst = float(sym_cfg.get("min_hurst", 0.40) or 0.40)
+    if hurst_val >= min_hurst:
+        return True, ""
+
+    if not bool(getattr(cfg, "SCALPING_ALLOW_LOW_HURST", True)):
+        return False, f"Hurst {hurst_val:.3f} < {min_hurst:.3f}"
+
+    hard_floor = float(getattr(cfg, "SCALPING_HURST_HARD_FLOOR", 0.18) or 0.18)
+    soft_margin = float(getattr(cfg, "SCALPING_HURST_SOFT_MARGIN", 0.20) or 0.20)
+    soft_floor = max(hard_floor, min_hurst - soft_margin)
+    if hurst_val < soft_floor:
+        return False, f"Hurst {hurst_val:.3f} < piso scalp {soft_floor:.3f}"
+
+    enhanced_regime = str(ind.get("enhanced_regime", "UNKNOWN") or "UNKNOWN")
+    zscore_signal = str(ind.get("zscore_returns", {}).get("signal", "NEUTRAL") or "NEUTRAL")
+    in_strong_zone = bool(getattr(sr_ctx, "in_strong_zone", False))
+
+    reasons = [f"zona gris {hurst_val:.2f}/{min_hurst:.2f}"]
+    if enhanced_regime != "UNKNOWN":
+        reasons.append(enhanced_regime)
+    if in_strong_zone:
+        reasons.append("SR fuerte")
+    if zscore_signal != "NEUTRAL":
+        reasons.append(f"z={zscore_signal}")
+    return True, " | ".join(reasons)
 
 
 def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
@@ -486,7 +626,8 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     if plan is None:
         return False, "⚠️ Tick no disponible", None
 
-    if not is_rr_valid(plan["price"], plan["sl"], plan["tp"]):
+    min_rr = _get_entry_min_rr(sym_cfg)
+    if not is_rr_valid(plan["price"], plan["sl"], plan["tp"], min_rr=min_rr):
         return False, f"⚖️ R:R inválido ({plan['rr']:.2f})", plan
 
     passes_filter, filter_reason = _passes_direction_filter(action, ind)
@@ -521,7 +662,7 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
 
     support_ok = sniper_aligned or in_strong_zone or abs(conf_total) >= (conf_min * 1.8)
     quality_score = sum([cycle_ok, trend_ok, support_ok])
-    min_quality = 2
+    min_quality = max(2, int(getattr(cfg, "GROQ_MIN_ENTRY_QUALITY", 3) or 3))
 
     if quality_score < min_quality:
         return False, (
@@ -532,6 +673,21 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     strategy_ok, strategy_reason = _evaluate_strategy_specific_gate(action, ind, sr_ctx, sym_cfg)
     if not strategy_ok:
         return False, f"🧭 {strategy_reason}", plan
+
+    strong_entry_required = bool(getattr(cfg, "GROQ_ENTRY_STRONG_ONLY", True))
+    premium_conf_mult = float(getattr(cfg, "GROQ_ENTRY_CONF_MULT", 1.8) or 1.8)
+    premium_conf_ok = abs(conf_total) >= (conf_min * premium_conf_mult)
+    hilbert_extreme_ok = (
+        (action == "BUY" and hilbert_signal == "LOCAL_MIN")
+        or (action == "SELL" and hilbert_signal == "LOCAL_MAX")
+    )
+    if strong_entry_required and not (
+        sniper_aligned or in_strong_zone or premium_conf_ok or hilbert_extreme_ok
+    ):
+        return False, (
+            f"⏱️ Entrada aún no es inminente {action}: "
+            f"sin zona fuerte ni confluencia premium ({conf_total:+.2f})"
+        ), plan
 
     return True, "", plan
 
@@ -756,47 +912,54 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
         _bump_groq_metric("cache_hits_total")
         return groq_call_cache[cache_key]
 
+    symbol_wait_left = _get_groq_symbol_cooldown_remaining(symbol, now_ts)
+    if symbol_wait_left > 0:
+        log.info(f"[groq] Cooldown por simbolo activo - omitiendo consulta {symbol} ({symbol_wait_left}s restantes)")
+        _bump_groq_metric("symbol_cooldown_skips_total")
+        fallback = _build_groq_fallback_decision(
+            f"Cooldown Groq por simbolo ({symbol_wait_left}s restantes)"
+        )
+        if cache_key:
+            groq_call_cache[cache_key] = fallback
+        return fallback
+
     if now_ts < groq_cooldown_until:
         wait_left = int(max(1, groq_cooldown_until - now_ts))
         log.warning(f"[groq] Cooldown global activo — omitiendo consulta {symbol} ({wait_left}s restantes)")
         _bump_groq_metric("cooldown_skips_total")
         fallback = _build_groq_fallback_decision(f"Cooldown Groq activo ({wait_left}s restantes)")
+        _set_groq_symbol_cooldown(symbol, seconds=wait_left)
         if cache_key:
             groq_call_cache[cache_key] = fallback
         return fallback
 
-    now = datetime.now(timezone.utc)
-    hour_key = now.strftime("%Y-%m-%d %H")
-    day_key = now.strftime("%Y-%m-%d")
-    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
-    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
-    current_hour_calls = int(groq_hourly_usage.get(hour_key, 0))
-    current_day_calls = int(groq_daily_usage.get(day_key, 0))
+    budget_ready_keys = []
+    for key_idx in range(len(groq_clients)):
+        budget_ok, _, _ = _is_groq_key_budget_available(key_idx)
+        if budget_ok:
+            budget_ready_keys.append(key_idx)
 
-    if (max_calls_hour > 0 and current_hour_calls >= max_calls_hour) or (
-        max_calls_day > 0 and current_day_calls >= max_calls_day
-    ):
-        limit_reason = (
-            f"Presupuesto Groq alcanzado (hora {current_hour_calls}/{max_calls_hour}, "
-            f"día {current_day_calls}/{max_calls_day})"
-        )
-        log.warning(f"[groq] {limit_reason} — omitiendo consulta {symbol}")
+    if groq_clients and not budget_ready_keys:
+        limit_reason = f"Presupuesto Groq agotado en todas las keys ({_format_groq_key_budget_status()})"
+        log.warning(f"[groq] {limit_reason} - omitiendo consulta {symbol}")
         _bump_groq_metric("skipped_by_budget_total")
         fallback = _build_groq_fallback_decision(limit_reason)
+        _set_groq_symbol_cooldown(symbol)
         if cache_key:
             groq_call_cache[cache_key] = fallback
         return fallback
 
-    max_attempts = 2
-    wait_secs = [0, 2]
-
-    for attempt in range(max_attempts):
-        if wait_secs[attempt] > 0:
-            log.info(f"[groq] Reintentando en {wait_secs[attempt]}s (intento {attempt+1}/{max_attempts})...")
-            time.sleep(wait_secs[attempt])
+    max_attempts = max(1, len(groq_clients))
+    tried_keys = set()
+    while len(tried_keys) < max(1, len(groq_clients)):
+        client_idx, client = _select_groq_client(time.time(), excluded=tried_keys)
+        if client is None:
+            break
+        tried_keys.add(client_idx)
+        attempt = len(tried_keys)
         try:
-            _bump_groq_metric("api_calls_total")
-            response = groq_client.chat.completions.create(
+            _bump_groq_metric("api_calls_total", key_idx=client_idx)
+            response = client.chat.completions.create(
                 model=cfg.GROQ_MODEL,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -814,13 +977,15 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
             payload = json.loads(raw)
             _set_last_groq_analysis(symbol, payload)
             _bump_groq_metric("api_success_total")
+            _set_groq_symbol_cooldown(symbol)
             if cache_key:
                 groq_call_cache[cache_key] = payload
             return payload
 
         except json.JSONDecodeError as e:
-            log.error(f"[groq] JSON inválido (intento {attempt+1}): {e}")
+            log.error(f"[groq] JSON inválido (intento {attempt}/{max_attempts}): {e}")
             _bump_groq_metric("errors_total")
+            _set_groq_symbol_cooldown(symbol)
             fallback = _build_groq_fallback_decision("Groq devolvió JSON inválido")
             if cache_key:
                 groq_call_cache[cache_key] = fallback
@@ -831,8 +996,22 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
             status_code = getattr(e, "status_code", None)
             if status_code == 429 or "429" in err_str or "rate_limit" in err_str.lower():
                 retry_after = _extract_retry_delay_seconds(err_str)
+                groq_key_cooldowns[client_idx] = time.time() + retry_after + 1.0
+                if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
+                    _bump_groq_metric("key_rotations_total")
+                    log.warning(
+                        f"[groq] Key #{client_idx+1} en cooldown {retry_after:.0f}s - probando siguiente key"
+                    )
+                    continue
                 groq_cooldown_until = time.time() + retry_after + 1.0
-                log.error(f"[groq] Cuota agotada — cooldown global {retry_after:.0f}s")
+                _set_groq_symbol_cooldown(
+                    symbol,
+                    seconds=max(
+                        int(math.ceil(retry_after)) + 1,
+                        int(getattr(cfg, "GROQ_SYMBOL_COOLDOWN_SEC", 0) or 0),
+                    ),
+                )
+                log.error(f"[groq] Cuota agotada - cooldown global {retry_after:.0f}s")
                 _bump_groq_metric("quota_hits_total")
                 fallback = _build_groq_fallback_decision(
                     f"Cuota Groq agotada, reintentar tras {retry_after:.0f}s"
@@ -841,24 +1020,34 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
                     groq_call_cache[cache_key] = fallback
                 return fallback
             if "503" in err_str or "UNAVAILABLE" in err_str:
-                if attempt < max_attempts - 1:
-                    log.warning(f"[groq] 503 UNAVAILABLE — reintentando...")
+                if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
+                    _bump_groq_metric("key_rotations_total")
+                    log.warning(f"[groq] 503 UNAVAILABLE en key #{client_idx+1} - probando siguiente key")
                     continue
             elif "404" in err_str or "NOT_FOUND" in err_str:
                 log.error(f"[groq] Modelo no disponible: {e}")
                 _bump_groq_metric("errors_total")
                 fallback = _build_groq_fallback_decision("Modelo Groq no disponible")
+                _set_groq_symbol_cooldown(symbol)
                 if cache_key:
                     groq_call_cache[cache_key] = fallback
                 return fallback
-            log.error(f"[groq] Error (intento {attempt+1}): {e}")
-            if attempt == max_attempts - 1:
+            log.error(f"[groq] Error con key #{client_idx+1}: {e}")
+            if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
+                _bump_groq_metric("key_rotations_total")
+                continue
+            if attempt == max_attempts:
                 _bump_groq_metric("errors_total")
                 fallback = _build_groq_fallback_decision("Error transitorio de Groq")
+                _set_groq_symbol_cooldown(symbol)
                 if cache_key:
                     groq_call_cache[cache_key] = fallback
                 return fallback
-    return _build_groq_fallback_decision("Groq sin respuesta")
+    fallback = _build_groq_fallback_decision("Groq sin respuesta")
+    _set_groq_symbol_cooldown(symbol)
+    if cache_key:
+        groq_call_cache[cache_key] = fallback
+    return fallback
 
 
 def build_context(
@@ -1771,12 +1960,62 @@ def _notify_news_pause_once(symbol: str, reason: str, duration_min: int):
         news_pause_notified[symbol] = now_ts
 
 
+def _build_memory_block_fingerprint(mem_check) -> str:
+    regime = str(getattr(mem_check, "regime", "") or "").strip().upper() or "UNKNOWN"
+    warning_msg = str(getattr(mem_check, "warning_msg", "") or "").strip()
+    normalized = warning_msg.lower()
+
+    if "modo calentamiento" in normalized:
+        if "caótico" in normalized or "chaotic" in normalized:
+            return f"WARMUP_CHAOTIC|{regime}"
+        return f"WARMUP|{regime}"
+
+    normalized = re.sub(r"\(\s*\d+\s*/\s*\d+\s*trades?\s*\)", "(n/trades)", normalized)
+    normalized = re.sub(r"\b\d+(?:\.\d+)?%?\b", "#", normalized)
+    normalized = re.sub(r"\s+", " ", normalized).strip(" |")
+    return f"{regime}|{normalized[:160]}"
+
+
+def _should_silence_memory_block_notification(mem_check) -> bool:
+    similar_losses = int(getattr(mem_check, "similar_losses", 0) or 0)
+    if similar_losses > 0:
+        return False
+
+    regime = str(getattr(mem_check, "regime", "") or "").strip().upper()
+    warning_msg = str(getattr(mem_check, "warning_msg", "") or "").strip().lower()
+    warmup_mode = bool(getattr(mem_check, "warmup_mode", False))
+
+    return warmup_mode or regime == "CHAOTIC" or "modo calentamiento" in warning_msg
+
+
 def _notify_memory_block_once(symbol: str, mem_check):
     global memory_block_notified
+    if _should_silence_memory_block_notification(mem_check):
+        return
     now_ts = time.time()
-    if now_ts - memory_block_notified.get(symbol, 0) >= NOTIF_COOLDOWN_SEC:
+    cooldown_sec = max(
+        int(getattr(cfg, "MEMORY_BLOCK_NOTIFY_COOLDOWN_SEC", NOTIF_COOLDOWN_SEC) or NOTIF_COOLDOWN_SEC),
+        NOTIF_COOLDOWN_SEC,
+    )
+    previous_state = memory_block_notified.get(symbol, {})
+    if isinstance(previous_state, dict):
+        last_ts = float(previous_state.get("ts", 0) or 0.0)
+        last_fingerprint = str(previous_state.get("fingerprint", "") or "")
+    else:
+        last_ts = float(previous_state or 0.0)
+        last_fingerprint = ""
+
+    current_fingerprint = _build_memory_block_fingerprint(mem_check)
+    should_notify = (
+        current_fingerprint != last_fingerprint
+        or (now_ts - last_ts) >= cooldown_sec
+    )
+    if should_notify:
         notify_memory_block(symbol, "BUY/SELL", mem_check.similar_losses, mem_check.warning_msg)
-        memory_block_notified[symbol] = now_ts
+        memory_block_notified[symbol] = {
+            "ts": now_ts,
+            "fingerprint": current_fingerprint,
+        }
 
 
 def _notify_equity_guard_once(symbol: str, equity: float, equity_floor: float, min_pct: float):
@@ -1876,8 +2115,7 @@ def _process_symbol(
     }
 
     if has_bot_position:
-        _set_symbol_status(symbol, f"📂 Posición abierta ({len(bot_sym_positions)}/{max_per_symbol}) — gestionando")
-        return
+        _set_symbol_status(symbol, f"📂 Posiciones abiertas ({len(bot_sym_positions)}/{max_per_symbol})")
 
     if cooldown_active:
         _set_symbol_status(symbol, f"⏳ Cooldown activo — {cooldown_remaining}s")
@@ -1948,11 +2186,15 @@ def _process_symbol(
 
     hurst_val = ind.get("hurst", 0.5)
     min_hurst = sym_cfg.get("min_hurst", 0.40)
-    if hurst_val < min_hurst:
+    hurst_allowed, hurst_reason = _should_allow_low_hurst_scalp(ind, sr_ctx, sym_cfg)
+    if not hurst_allowed:
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
         last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
         _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
         return
+    if hurst_val < min_hurst:
+        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
+        _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
 
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
@@ -2027,7 +2269,6 @@ def _process_symbol(
             log.info(f"[{symbol}] Lateral sin candidato listo — {reasons}")
             return
 
-        memory_block_notified.pop(symbol, None)
         cache_key = _build_groq_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
         context = build_lateral_context(
             symbol=symbol,
@@ -2070,9 +2311,6 @@ def _process_symbol(
         _set_symbol_status(symbol, f"🧠 {mem_check.warning_msg[:48]}")
         _notify_memory_block_once(symbol, mem_check)
         return
-    else:
-        memory_block_notified.pop(symbol, None)
-
     if scorecard.should_block:
         msg = (
             f"🧮 Scorecard vetó {mem_direction} "
@@ -2285,7 +2523,8 @@ def _execute_decision(
     sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
 
     rr = get_rr(price, sl, tp)
-    if not is_rr_valid(price, sl, tp):
+    min_rr = _get_entry_min_rr(sym_cfg)
+    if not is_rr_valid(price, sl, tp, min_rr=min_rr):
         last_action = f"R:R inválido {symbol} ({rr:.2f})"
         _set_symbol_status(symbol, f"⚖️ R:R inválido ({rr:.2f})")
         return

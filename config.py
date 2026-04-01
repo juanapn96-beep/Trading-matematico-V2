@@ -56,6 +56,33 @@ def _require_env(name: str) -> str:
     return value
 
 
+def _split_env_csv(name: str) -> list:
+    raw = os.environ.get(name, "")
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _collect_numbered_env(base_name: str) -> list:
+    items = []
+    prefix = f"{base_name}_"
+    for env_name, raw_value in os.environ.items():
+        if not env_name.startswith(prefix):
+            continue
+        suffix = env_name[len(prefix):]
+        if not suffix.isdigit():
+            continue
+        value = str(raw_value).strip()
+        if value:
+            items.append((int(suffix), value))
+    return [value for _, value in sorted(items)]
+
+
 # ================================================================
 #  MT5 / BROKER
 # ================================================================
@@ -75,9 +102,25 @@ _NO_SUFFIX = {"USTEC", "DE40", "US30"}
 #  GROQ
 # ================================================================
 GROQ_API_KEY   = _require_env("GROQ_API_KEY")
+GROQ_API_KEYS  = [GROQ_API_KEY]
+for _extra_groq_key in _collect_numbered_env("GROQ_API_KEY"):
+    if _extra_groq_key not in GROQ_API_KEYS:
+        GROQ_API_KEYS.append(_extra_groq_key)
+for _extra_groq_key in _split_env_csv("GROQ_API_KEYS"):
+    if _extra_groq_key not in GROQ_API_KEYS:
+        GROQ_API_KEYS.append(_extra_groq_key)
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
 GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
+GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "300") or 300)
+GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "2") or 2)
+GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
+GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "1.8") or 1.8)
+GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
+ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.20") or 1.20)
+SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
+SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
+SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
 
 # ================================================================
 #  TELEGRAM
@@ -863,7 +906,7 @@ SYMBOLS = {
 # ================================================================
 RISK_PER_TRADE      = 0.01   # 1% del balance por trade
 MAX_OPEN_TRADES     = 25     # máximo global simultáneo
-MAX_OPEN_PER_SYMBOL = 1      # máximo 1 trade por símbolo
+MAX_OPEN_PER_SYMBOL = int(os.environ.get("MAX_OPEN_PER_SYMBOL", "3") or 3)
 MAGIC_NUMBER        = 202606
 
 # FIX v6.4: Breakeven basado en ATR, no en pips fijos
@@ -874,6 +917,13 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
 SYMBOL_COOLDOWN_SEC = 180
+
+# Cooldown específico para avisos de "bloqueo por memoria" en Telegram.
+# Evita repetir el mismo warning una y otra vez cuando el símbolo sigue
+# en warmup o en un régimen adverso durante varias horas.
+MEMORY_BLOCK_NOTIFY_COOLDOWN_SEC = int(
+    os.environ.get("MEMORY_BLOCK_NOTIFY_COOLDOWN_SEC", "14400")
+)
 
 # ── Circuit Breaker individual de posición (Cisne Negro) ─────────
 # Si el drawdown de una posición abierta supera este % del balance,
@@ -1107,8 +1157,9 @@ BACKTEST_WALK_FORWARD_STEP_MONTHS  = 1   # Avance por iteración
 # ================================================================
 # Configurado vía variables de entorno GROQ_MAX_CALLS_PER_HOUR y
 # GROQ_MAX_CALLS_PER_DAY (ver sección GROQ al inicio de este archivo).
-# 0 = desactivado. Si se define >0, el bot no hará más llamadas una vez
-# alcanzado el límite y usará fallback HOLD para evitar gasto excedente.
+# 0 = desactivado. Si se define >0, el límite se interpreta por key/proyecto.
+# Cuando una key alcanza su cupo, el bot rota a la siguiente disponible.
+# Si todas las keys alcanzan el límite, usa fallback HOLD para evitar gasto excedente.
 
 
 # ================================================================
