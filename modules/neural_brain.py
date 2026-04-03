@@ -566,7 +566,8 @@ class MarketRegimeDetector:
         kalman      = features.kalman_trend_num
 
         # Reglas de detección de régimen
-        if hurst < 0.40:
+        if hurst < 0.30:
+            # Solo es CHAOTIC con Hurst muy bajo (< 0.30)
             scalp_low_hurst_enabled = bool(getattr(cfg, "SCALPING_ALLOW_LOW_HURST", True))
             scalp_hard_floor = float(getattr(cfg, "SCALPING_HURST_HARD_FLOOR", 0.18) or 0.18)
             scalp_conf_floor = float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.25) or 0.25) / 3.0
@@ -577,7 +578,10 @@ class MarketRegimeDetector:
                 and abs(features.confluence_total_norm) >= scalp_conf_floor
             ):
                 return "RANGING", 0.78
-            return "CHAOTIC", 0.25
+            return "CHAOTIC", 0.40  # Score subido de 0.25 a 0.40
+        elif hurst < 0.40:
+            # Hurst 0.30-0.40: RANGING, no CHAOTIC. Scalping viable.
+            return "RANGING", 0.70
 
         if atr > 0.75 and bb_squeeze > 0.5:
             return "VOLATILE", 0.60

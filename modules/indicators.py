@@ -781,6 +781,13 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         ctx["atr"]       = round(float(atr_s.iloc[-1]), 4)
         ctx["atr_pct"]   = round(float(atr_s.iloc[-1] / close.iloc[-1] * 100), 3)
 
+        # ── ATR del timeframe de entrada (para scalping SL/TP) ──
+        if df_entry is not None and len(df_entry) >= 20:
+            atr_entry_s = atr(df_entry, 14)
+            ctx["atr_entry"] = round(float(atr_entry_s.iloc[-1]), 6)
+        else:
+            ctx["atr_entry"] = ctx["atr"]  # fallback a ATR del timeframe de tendencia
+
         bb_u, bb_m, bb_l = bollinger_bands(close)
         ctx["bb_upper"]  = round(float(bb_u.iloc[-1]), 4)
         ctx["bb_mid"]    = round(float(bb_m.iloc[-1]), 4)
@@ -997,17 +1004,17 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         ])
 
         # Clasificación por votos + Hurst
-        if bullish_votes >= 5 and h_v > 0.55:
+        if bullish_votes >= 6 and h_v > 0.55:
             ctx["h1_trend"] = "ALCISTA_FUERTE"
-        elif bullish_votes >= 4:
+        elif bullish_votes >= 5:
             ctx["h1_trend"] = "ALCISTA"
-        elif bullish_votes >= 3 and bullish_votes > bearish_votes:
+        elif bullish_votes >= 4 and bullish_votes > bearish_votes:
             ctx["h1_trend"] = "LATERAL_ALCISTA"
-        elif bearish_votes >= 5 and h_v > 0.55:
+        elif bearish_votes >= 6 and h_v > 0.55:
             ctx["h1_trend"] = "BAJISTA_FUERTE"
-        elif bearish_votes >= 4:
+        elif bearish_votes >= 5:
             ctx["h1_trend"] = "BAJISTA"
-        elif bearish_votes >= 3 and bearish_votes > bullish_votes:
+        elif bearish_votes >= 4 and bearish_votes > bullish_votes:
             ctx["h1_trend"] = "LATERAL_BAJISTA"
         else:
             ctx["h1_trend"] = "LATERAL"
