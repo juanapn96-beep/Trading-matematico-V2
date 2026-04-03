@@ -690,16 +690,6 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
             f"sin zona fuerte ni confluencia premium ({conf_total:+.2f})"
         ), plan
 
-    # SCALPING_ONLY: exige señal Hilbert en extremo de ciclo antes de consultar Groq.
-    # Esto reduce drásticamente las llamadas a la API: Groq sólo se invoca cuando
-    # el precio está en LOCAL_MIN (entrada BUY scalp) o LOCAL_MAX (entrada SELL scalp),
-    # condición que ocurre muy poco frecuente en comparación con el resto del ciclo.
-    if bool(getattr(cfg, "SCALPING_ONLY", False)) and not hilbert_extreme_ok:
-        return False, (
-            f"⏳ Scalp: esperando extremo Hilbert {action} "
-            f"(actual={hilbert_signal})"
-        ), plan
-
     return True, "", plan
 
 # ════════════════════════════════════════════════════════════════
@@ -2283,11 +2273,12 @@ def _process_symbol(
 
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
-    if "BAJISTA" in h1_trend:
+    if h1_trend in ("BAJISTA_FUERTE", "BAJISTA"):
         mem_direction = "SELL"
-    elif "ALCISTA" in h1_trend:
+    elif h1_trend in ("ALCISTA_FUERTE", "ALCISTA"):
         mem_direction = "BUY"
     else:
+        # LATERAL_ALCISTA, LATERAL_BAJISTA, LATERAL → evaluar ambas direcciones
         feat_buy  = build_features(symbol, "BUY",  ind, sr_ctx, news_ctx, sym_cfg)
         feat_sell = build_features(symbol, "SELL", ind, sr_ctx, news_ctx, sym_cfg)
         mem_buy   = check_memory(feat_buy,  symbol, "BUY",  sym_cfg)
@@ -2605,17 +2596,22 @@ def _execute_decision(
         _set_symbol_status(symbol, "⚠️ Tick no disponible")
         return
     price  = tick.ask if action == "BUY" else tick.bid
-    sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
     min_hurst = float(sym_cfg.get("min_hurst", 0.40) or 0.40)
     hurst_val = float(ind.get("hurst", 0.5) or 0.5)
     is_scalp_trade = bool(getattr(cfg, "SCALPING_ONLY", False)) or bool(hurst_val < min_hurst)
     if is_scalp_trade:
-        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.82) or 0.82)
-        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
+        # Scalping: usar ATR del TF de entrada (M1) para SL/TP proporcionales
+        atr_entry = ind.get("atr_entry", ind["atr"])
+        scalp_sl_mult = float(getattr(cfg, "SCALPING_SL_ATR_MULT", 3.0))
+        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_ATR_MULT", 6.0))
         if action == "BUY":
-            tp = round(price + ((tp - price) * scalp_tp_mult), 5)
+            sl = round(price - scalp_sl_mult * atr_entry, 5)
+            tp = round(price + scalp_tp_mult * atr_entry, 5)
         else:
-            tp = round(price - ((price - tp) * scalp_tp_mult), 5)
+            sl = round(price + scalp_sl_mult * atr_entry, 5)
+            tp = round(price - scalp_tp_mult * atr_entry, 5)
+    else:
+        sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
 
     rr = get_rr(price, sl, tp)
     min_rr = _get_entry_min_rr(sym_cfg)

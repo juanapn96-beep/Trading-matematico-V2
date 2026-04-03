@@ -112,12 +112,12 @@ for _extra_groq_key in _split_env_csv("GROQ_API_KEYS"):
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
 GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
-GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "900") or 900)
+GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120") or 120)
 GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
 GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
 GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "1.8") or 1.8)
 GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
-ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.20") or 1.20)
+ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
 # Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido)
 # y Groq sólo se consulta cuando Hilbert está en extremo de ciclo (LOCAL_MIN/LOCAL_MAX).
 SCALPING_ONLY            = _env_flag("SCALPING_ONLY", True)
@@ -125,11 +125,17 @@ SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
 SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
 SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
 SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.82") or 0.82)
-SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "3.0") or 3.0)
-SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "5.0") or 5.0)
-SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "8.0") or 8.0)
-SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "12.0") or 12.0)
-SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",     "2.0") or 2.0)
+# ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
+# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
+# para calcular SL y TP. Esto hace que los stops sean proporcionales al
+# movimiento real del timeframe en que se opera.
+SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
+SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
+SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "8.0") or 8.0)
+SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
+SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
+SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
+SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",     "5.0") or 5.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================
@@ -914,9 +920,9 @@ SYMBOLS = {
 # ================================================================
 #  GESTIÓN DE RIESGO GLOBAL
 # ================================================================
-RISK_PER_TRADE      = 0.01   # 1% del balance por trade
-MAX_OPEN_TRADES     = 25     # máximo global simultáneo
-MAX_OPEN_PER_SYMBOL = int(os.environ.get("MAX_OPEN_PER_SYMBOL", "3") or 3)
+RISK_PER_TRADE      = 0.02   # 2% del balance por trade
+MAX_OPEN_TRADES     = 5      # máximo 5 trades simultáneos (scalping concentrado)
+MAX_OPEN_PER_SYMBOL = int(os.environ.get("MAX_OPEN_PER_SYMBOL", "1") or 1)
 MAGIC_NUMBER        = 202606
 
 # FIX v6.4: Breakeven basado en ATR, no en pips fijos
@@ -926,7 +932,7 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
-SYMBOL_COOLDOWN_SEC = 180
+SYMBOL_COOLDOWN_SEC = 60   # 1 minuto entre trades del mismo símbolo (scalping)
 
 # Cooldown específico para avisos de "bloqueo por memoria" en Telegram.
 # Evita repetir el mismo warning una y otra vez cuando el símbolo sigue
@@ -956,7 +962,7 @@ WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "50")))
 WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "0.5"))
 
 # Tiempo de espera entre iteraciones del ciclo principal (segundos)
-LOOP_SLEEP_SEC      = 30
+LOOP_SLEEP_SEC      = 15   # 15 segundos entre ciclos (scalping necesita reactividad)
 
 MAX_DAILY_LOSS      = 0.05   # 5% pérdida máxima diaria
 
@@ -988,7 +994,7 @@ FISHER_ENABLED  = True
 #  TIMEFRAMES
 # ================================================================
 TF_ENTRY = "M1"
-TF_TREND = "H1"
+TF_TREND = "M15"
 
 # ================================================================
 #  NOTICIAS
