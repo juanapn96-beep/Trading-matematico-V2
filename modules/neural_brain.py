@@ -1178,7 +1178,7 @@ def update_trade_result(
     cur = con.cursor()
 
     row = cur.execute(
-        "SELECT id, features_json, symbol, direction FROM trades WHERE ticket=?",
+        "SELECT id, features_json, symbol, direction, risk_amount FROM trades WHERE ticket=?",
         (ticket,)
     ).fetchone()
 
@@ -1186,10 +1186,15 @@ def update_trade_result(
         con.close()
         return
 
-    trade_id, feat_json, symbol, direction = row
+    trade_id, feat_json, symbol, direction, risk_amount_raw = row
 
-    # Calcular reward Sharpe-inspired
-    reward = compute_reward(profit, abs(profit / max(pips, 0.1)), duration_min, result)
+    # FIX v7.0: Calcular reward usando risk_amount (dólares arriesgados en el SL).
+    # Antes se pasaba abs(profit/pips) = $/pip, que era incorrecto como sl_distance.
+    # Con risk_amount: risk_pct = risk_amount/balance*100 → penalización correcta.
+    # Fallback: usar 1.5× |profit| si risk_amount no está disponible (trades viejos).
+    risk_amount_val = float(risk_amount_raw or 0.0)
+    sl_dist = risk_amount_val if risk_amount_val > 0 else max(abs(profit) * 1.5, 1.0)
+    reward = compute_reward(profit, sl_dist, duration_min, result)
 
     cur.execute("""
         UPDATE trades SET close_price=?, profit=?, pips=?,
