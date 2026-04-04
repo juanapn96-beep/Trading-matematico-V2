@@ -592,6 +592,12 @@ _GET_CANDLES_RETRY_WAIT = 0.5
 # Da tiempo a MT5 para iniciar la descarga asíncrona de historial.
 _SYMBOL_WARMUP_WAIT_SEC = 2
 
+# ── Constantes de reconexión MT5 con backoff exponencial ──
+_RECONNECT_BASE_DELAY_SEC = 30
+_RECONNECT_MAX_EXPONENT = 4     # máx factor = 2^4 = 16 → 30*16 = 480s
+_RECONNECT_MAX_DELAY_SEC = 300  # tope absoluto 5 min
+_mt5_reconnect_fails = 0        # contador de fallos consecutivos (module-level)
+
 
 def conectar_mt5() -> bool:
     if not mt5.initialize():
@@ -2522,15 +2528,18 @@ def run():
 
             balance, equity = get_account_info()
             if balance is None:
+                global _mt5_reconnect_fails
                 log.warning("[main] Sin balance — reconectando...")
                 if not conectar_mt5():
-                    _mt5_reconnect_fails = getattr(run, '_mt5_reconnect_fails', 0) + 1
-                    run._mt5_reconnect_fails = _mt5_reconnect_fails
-                    wait = min(30 * (2 ** min(_mt5_reconnect_fails - 1, 4)), 300)
+                    _mt5_reconnect_fails += 1
+                    wait = min(
+                        _RECONNECT_BASE_DELAY_SEC * (2 ** min(_mt5_reconnect_fails - 1, _RECONNECT_MAX_EXPONENT)),
+                        _RECONNECT_MAX_DELAY_SEC,
+                    )
                     log.warning(f"[main] Reconexión fallida #{_mt5_reconnect_fails}, espera {wait}s")
                     time.sleep(wait)
                     continue
-                run._mt5_reconnect_fails = 0
+                _mt5_reconnect_fails = 0
 
             maybe_send_daily_summary(balance, equity)
             maybe_send_eod_analysis(balance, equity)

@@ -105,10 +105,10 @@ def deterministic_decision(
     elif direction == "SELL" and fisher_val > 1.5:
         score += 0.75
         reasons.append(f"Fisher={fisher_val:.1f}(extremo_alto✓)")
-    elif direction == "BUY" and str(fisher_cross) == "BULL_CROSS":
+    elif direction == "BUY" and fisher_cross == "BULL_CROSS":
         score += 0.5
         reasons.append("Fisher=BULL_CROSS✓")
-    elif direction == "SELL" and str(fisher_cross) == "BEAR_CROSS":
+    elif direction == "SELL" and fisher_cross == "BEAR_CROSS":
         score += 0.5
         reasons.append("Fisher=BEAR_CROSS✓")
 

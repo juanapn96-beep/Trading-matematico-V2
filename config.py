@@ -242,6 +242,7 @@ SYMBOLS = {
         "min_decision_score": 4.0,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.10,
+        "sr_lookback":    100,
         "sr_timeframes":  ["M5", "M15", "H1"],
         "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
         "atr_norm_factor":  0.0015,
