@@ -50,18 +50,14 @@ def deterministic_decision(
         reasons.append(f"votes:{vote_score}/6=INSUFICIENTE")
 
     # Bonus si SuperTrend y Kalman confirman (ambos)
-    st_dir = indicators.get("supertrend_dir", "")
+    # indicators["supertrend"]: 1 = alcista, -1 = bajista (entero)
+    # indicators["kalman_trend"]: "ALCISTA" / "BAJISTA"
+    st_val = indicators.get("supertrend", 0)
     kalman_trend = indicators.get("kalman_trend", "")
     if direction == "BUY":
-        both_confirm = (
-            (st_dir == "UP" or st_dir == "BUY") and
-            ("UP" in str(kalman_trend).upper() or "BUY" in str(kalman_trend).upper() or "BULL" in str(kalman_trend).upper())
-        )
+        both_confirm = (st_val == 1) and (kalman_trend == "ALCISTA")
     else:
-        both_confirm = (
-            (st_dir == "DOWN" or st_dir == "SELL") and
-            ("DOWN" in str(kalman_trend).upper() or "SELL" in str(kalman_trend).upper() or "BEAR" in str(kalman_trend).upper())
-        )
+        both_confirm = (st_val == -1) and (kalman_trend == "BAJISTA")
 
     if both_confirm:
         score += 1.0
@@ -92,7 +88,7 @@ def deterministic_decision(
         reasons.append(f"Hilbert={hilbert_signal}")
 
     # RSI divergence
-    rsi_div = indicators.get("rsi_divergence", "NONE")
+    rsi_div = indicators.get("rsi_div", "NONE")
     if direction == "BUY" and "BULL" in str(rsi_div).upper():
         score += 0.5
         reasons.append("RSI_div=BULL✓")
@@ -101,17 +97,30 @@ def deterministic_decision(
         reasons.append("RSI_div=BEAR✓")
 
     # ═══ PILAR 3: ZONAS S/R (max +2.0) ═══
-    nearest_sr = sr_context.get("nearest", {}) if isinstance(sr_context, dict) else {}
-    sr_type = nearest_sr.get("type", "")
-    sr_strength = nearest_sr.get("strength", 0)
     in_strong_zone = sr_context.get("in_strong_zone", False) if isinstance(sr_context, dict) else False
 
-    if direction == "BUY" and "support" in str(sr_type).lower() and sr_strength >= 5:
+    # SRContext.__dict__ contains "supports" and "resistances" as lists of SRZone objects.
+    # supports is sorted closest-first; resistances likewise.
+    if isinstance(sr_context, dict):
+        supports = sr_context.get("supports", [])
+        resistances = sr_context.get("resistances", [])
+        # Handles both SRZone dataclass objects (getattr) and plain dicts (.get)
+        def _strength(zone) -> float:
+            if isinstance(zone, dict):
+                return zone.get("strength", 0)
+            return getattr(zone, "strength", 0)
+        nearest_sup_strength = _strength(supports[0]) if supports else 0
+        nearest_res_strength = _strength(resistances[0]) if resistances else 0
+    else:
+        nearest_sup_strength = 0
+        nearest_res_strength = 0
+
+    if direction == "BUY" and nearest_sup_strength >= 5:
         score += 1.5
-        reasons.append(f"S/R=soporte_fuerte({sr_strength})")
-    elif direction == "SELL" and "resist" in str(sr_type).lower() and sr_strength >= 5:
+        reasons.append(f"S/R=soporte_fuerte({nearest_sup_strength:.0f})")
+    elif direction == "SELL" and nearest_res_strength >= 5:
         score += 1.5
-        reasons.append(f"S/R=resistencia_fuerte({sr_strength})")
+        reasons.append(f"S/R=resistencia_fuerte({nearest_res_strength:.0f})")
 
     if in_strong_zone:
         score += 0.5
