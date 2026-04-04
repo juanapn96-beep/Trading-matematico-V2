@@ -36,12 +36,14 @@ except ImportError:
 
 try:
     from groq import Groq
+    _GROQ_AVAILABLE = True
 except ImportError:
-    print("❌  pip install groq"); sys.exit(1)
+    _GROQ_AVAILABLE = False
 
 import config as cfg
 from modules.indicators        import compute_all
 from modules.sr_zones          import build_sr_context, sr_for_prompt
+from modules.decision_engine   import deterministic_decision
 from modules.news_engine       import (
     build_news_context, build_shared_news_context, derive_symbol_news_context,
     format_news_for_prompt,
@@ -90,6 +92,8 @@ log = logging.getLogger(__name__)
 
 # ── Groq ────────────────────────────────────────────────────────
 def _build_groq_client(api_key: str):
+    if not _GROQ_AVAILABLE:
+        return None
     max_retries = int(getattr(cfg, "GROQ_CLIENT_MAX_RETRIES", 0) or 0)
     try:
         return Groq(api_key=api_key, max_retries=max_retries)
@@ -97,9 +101,11 @@ def _build_groq_client(api_key: str):
         return Groq(api_key=api_key)
 
 
+_groq_keys = getattr(cfg, "GROQ_API_KEYS", []) or []
 groq_clients = [
     _build_groq_client(api_key)
-    for api_key in getattr(cfg, "GROQ_API_KEYS", [cfg.GROQ_API_KEY])
+    for api_key in _groq_keys
+    if api_key
 ]
 
 # ── TF Map MT5 ───────────────────────────────────────────────────
@@ -183,6 +189,13 @@ groq_hourly_usage_by_key: dict = {}
 groq_daily_usage_by_key: dict = {}
 shared_news_cache = None
 shared_news_last_update: float = 0.0
+
+# ── Per-symbol state for deterministic decision engine ───────────
+_symbol_state: dict = {}  # {symbol: {mem_direction, last_indicators, last_sr_context, last_news_context, hurst_penalty}}
+
+# ── H1 indicator cache (H1 candle changes at most once per hour) ─
+_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float, "h1_candle_time": object}}
+H1_CACHE_TTL_SEC = 300    # 5 minutes
 
 
 def _set_symbol_status(symbol: str, status: str):
@@ -705,16 +718,6 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
             f"sin zona fuerte ni confluencia premium ({conf_total:+.2f})"
         ), plan
 
-    # SCALPING_ONLY: exige señal Hilbert en extremo de ciclo antes de consultar Groq.
-    # Esto reduce drásticamente las llamadas a la API: Groq sólo se invoca cuando
-    # el precio está en LOCAL_MIN (entrada BUY scalp) o LOCAL_MAX (entrada SELL scalp),
-    # condición que ocurre muy poco frecuente en comparación con el resto del ciclo.
-    if bool(getattr(cfg, "SCALPING_ONLY", False)) and not hilbert_extreme_ok:
-        return False, (
-            f"⏳ Scalp: esperando extremo Hilbert {action} "
-            f"(actual={hilbert_signal})"
-        ), plan
-
     return True, "", plan
 
 # ════════════════════════════════════════════════════════════════
@@ -930,6 +933,44 @@ def get_system_prompt(sym_cfg: dict) -> str:
 
 
 def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+    """
+    Decision gateway: uses deterministic engine by default (no Groq key needed).
+    If GROQ_API_KEY is configured and groq is available, delegates to the Groq LLM.
+    Maintains backward compatibility with callers expecting {"action", "confidence", ...}.
+    """
+    # ── Deterministic path (default, no Groq key required) ───────
+    if not groq_clients:
+        state = _symbol_state.get(symbol, {})
+        direction = state.get("mem_direction", "")
+        indicators = state.get("last_indicators", {})
+        sr_context = state.get("last_sr_context", {})
+        news_ctx = state.get("last_news_context", None)
+
+        if not direction:
+            log.debug(f"[decision] {symbol}: sin dirección pre-calculada → HOLD")
+            return {"decision": "HOLD", "confidence": 1, "reason": "Sin dirección"}
+
+        result = deterministic_decision(
+            symbol=symbol,
+            direction=direction,
+            indicators=indicators,
+            sr_context=sr_context,
+            news_context=news_ctx,
+            sym_cfg=sym_cfg,
+        )
+        return {
+            "decision": result["decision"],
+            "confidence": result["confidence"],
+            "reason": result.get("reason", ""),
+            "score": result.get("score", 0.0),
+        }
+
+    # ── Groq LLM path (only when GROQ_API_KEY is set) ────────────
+    return _ask_groq_llm(symbol, context, sym_cfg, cache_key)
+
+
+def _ask_groq_llm(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+    """Original Groq LLM call — only invoked when GROQ_API_KEY is configured."""
     system_prompt = get_system_prompt(sym_cfg)
     global groq_cooldown_until, groq_call_cache
 
@@ -2219,7 +2260,20 @@ def _process_symbol(
         _set_symbol_status(symbol, "⚠️ Datos insuficientes de MT5")
         return
 
-    ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
+    _now_h1 = time.time()
+    _cached_h1 = _h1_cache.get(symbol)
+    if _cached_h1 is not None and (_now_h1 - _cached_h1.get("timestamp", 0)) < H1_CACHE_TTL_SEC:
+        # Reuse cached H1 indicators; update the fast-changing price fields in place.
+        ind = _cached_h1["indicators"]
+        ind["price"] = round(float(df_h1["close"].iloc[-1]), 4)
+        if df_entry is not None and len(df_entry) > 0:
+            ind["entry_price"] = round(float(df_entry["close"].iloc[-1]), 4)
+            if "time" in df_entry.columns:
+                ind["entry_candle_time"] = pd.Timestamp(df_entry["time"].iloc[-1]).isoformat()
+        log.debug(f"[{symbol}] H1 cache hit — indicadores reutilizados")
+    else:
+        ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
+        _h1_cache[symbol] = {"indicators": ind, "timestamp": _now_h1}
     ind_cache[symbol] = ind
     symbol_detail_cache[symbol] = {
         "enhanced_regime":   ind.get("enhanced_regime", "UNKNOWN"),
@@ -2297,25 +2351,52 @@ def _process_symbol(
     else:
         news_pause_notified.pop(symbol, None)
 
+    # ── Store context for deterministic decision engine ───────────
+    if symbol not in _symbol_state:
+        _symbol_state[symbol] = {}
+    _symbol_state[symbol]["last_sr_context"] = (
+        sr_ctx.__dict__ if hasattr(sr_ctx, "__dict__") else sr_ctx
+    )
+    _symbol_state[symbol]["last_news_context"] = news_ctx
+
     hurst_val = ind.get("hurst", 0.5)
     min_hurst = sym_cfg.get("min_hurst", 0.40)
     hurst_allowed, hurst_reason = _should_allow_low_hurst_scalp(ind, sr_ctx, sym_cfg)
     if not hurst_allowed:
-        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
-        last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
-        _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
-        return
+        if getattr(cfg, "SCALPING_ONLY", False):
+            # In scalping mode, low Hurst is a score penalty, not a hard block
+            hurst_penalty = round((min_hurst - hurst_val) * 5, 2)
+            log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — penalty={hurst_penalty:.1f} (scalping mode)")
+            _set_symbol_status(symbol, f"📉 Hurst scalp penalizado {hurst_val:.2f}")
+            # Propagate penalty into indicators so decision_engine can apply it
+            ind["hurst_penalty"] = hurst_penalty
+            _symbol_state[symbol]["hurst_penalty"] = hurst_penalty
+            # Continue processing (don't skip)
+        else:
+            log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
+            last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
+            _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
+            return
+    else:
+        ind["hurst_penalty"] = 0.0
+        _symbol_state[symbol]["hurst_penalty"] = 0.0
+
+    # Store updated indicators (with hurst_penalty) for decision engine
+    _symbol_state[symbol]["last_indicators"] = ind
     if hurst_val < min_hurst:
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
         _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
 
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
-    if "BAJISTA" in h1_trend:
+    if h1_trend in ("BAJISTA_FUERTE", "BAJISTA"):
         mem_direction = "SELL"
-    elif "ALCISTA" in h1_trend:
+        _symbol_state[symbol]["mem_direction"] = mem_direction
+    elif h1_trend in ("ALCISTA_FUERTE", "ALCISTA"):
         mem_direction = "BUY"
+        _symbol_state[symbol]["mem_direction"] = mem_direction
     else:
+        # LATERAL_ALCISTA, LATERAL_BAJISTA, LATERAL → evaluar ambas direcciones
         feat_buy  = build_features(symbol, "BUY",  ind, sr_ctx, news_ctx, sym_cfg)
         feat_sell = build_features(symbol, "SELL", ind, sr_ctx, news_ctx, sym_cfg)
         mem_buy   = check_memory(feat_buy,  symbol, "BUY",  sym_cfg)
@@ -2383,6 +2464,8 @@ def _process_symbol(
             return
 
         cache_key = _build_groq_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
+        # Store the first viable direction for the deterministic decision engine
+        _symbol_state[symbol]["mem_direction"] = ready_actions[0]
         context = build_lateral_context(
             symbol=symbol,
             ind=ind,
@@ -2633,17 +2716,22 @@ def _execute_decision(
         _set_symbol_status(symbol, "⚠️ Tick no disponible")
         return
     price  = tick.ask if action == "BUY" else tick.bid
-    sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
     min_hurst = float(sym_cfg.get("min_hurst", 0.40) or 0.40)
     hurst_val = float(ind.get("hurst", 0.5) or 0.5)
     is_scalp_trade = bool(getattr(cfg, "SCALPING_ONLY", False)) or bool(hurst_val < min_hurst)
     if is_scalp_trade:
-        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.82) or 0.82)
-        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
+        # Scalping: usar ATR del TF de entrada (M1) para SL/TP proporcionales
+        atr_entry = ind.get("atr_entry", ind["atr"])
+        scalp_sl_mult = float(getattr(cfg, "SCALPING_SL_ATR_MULT", 3.0))
+        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_ATR_MULT", 6.0))
         if action == "BUY":
-            tp = round(price + ((tp - price) * scalp_tp_mult), 5)
+            sl = round(price - scalp_sl_mult * atr_entry, 5)
+            tp = round(price + scalp_tp_mult * atr_entry, 5)
         else:
-            tp = round(price - ((price - tp) * scalp_tp_mult), 5)
+            sl = round(price + scalp_sl_mult * atr_entry, 5)
+            tp = round(price - scalp_tp_mult * atr_entry, 5)
+    else:
+        sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
 
     rr = get_rr(price, sl, tp)
     min_rr = _get_entry_min_rr(sym_cfg)

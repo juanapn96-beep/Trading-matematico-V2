@@ -19,8 +19,16 @@ import time
 from typing import Optional
 
 import requests
+import config as cfg
 
 log = logging.getLogger(__name__)
+
+
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in cfg._NO_SUFFIX:
+        return base
+    return f"{base}{cfg.BROKER_SUFFIX}"
 
 # ── Cache ────────────────────────────────────────────────────────
 _cache: dict = {}
@@ -117,16 +125,16 @@ _COT_MARKET_MAP = {
     "BITCOIN":              "BTC",
 }
 
-# Símbolo interno COT → símbolos Exness que aplican
+# Símbolo interno COT → símbolos del broker configurado que aplican
 _COT_SYMBOL_COVERAGE = {
-    "EUR":    ["EURUSDm", "EURJPYm"],
-    "GBP":    ["GBPUSDm", "GBPJPYm"],
-    "JPY":    ["USDJPYm", "EURJPYm", "GBPJPYm"],
-    "GOLD":   ["XAUUSDm"],
-    "SILVER": ["XAGUSDm"],
-    "OIL":    ["USOILm"],
-    "SP500":  ["US500m"],
-    "BTC":    ["BTCUSDm"],
+    "EUR":    [_sym("EURUSD"), _sym("EURJPY")],
+    "GBP":    [_sym("GBPUSD"), _sym("GBPJPY")],
+    "JPY":    [_sym("USDJPY"), _sym("EURJPY"), _sym("GBPJPY")],
+    "GOLD":   [_sym("XAUUSD")],
+    "SILVER": [_sym("XAGUSD")],
+    "OIL":    [_sym("USOIL")],
+    "SP500":  [_sym("US500")],
+    "BTC":    [_sym("BTCUSD")],
 }
 
 # URL del reporte COT (archivo de texto plano, sin key)
@@ -269,18 +277,18 @@ def _get_cot_for_symbol(symbol: str) -> Optional[dict]:
 
 # ── Mapa de símbolo → fuentes de sentimiento relevantes ─────────
 SYMBOL_SENTIMENT_MAP = {
-    "BTCUSDm": ["crypto_fng", "cot"],
-    "US500m":  ["vix", "cot"],
-    "USTEC":   ["vix"],
-    "DE40":    ["vix"],
-    "XAUUSDm": ["vix", "cot"],
-    "XAGUSDm": ["vix", "cot"],
-    "USOILm":  ["vix", "cot"],
-    "EURUSDm": ["cot"],
-    "GBPUSDm": ["cot"],
-    "USDJPYm": ["cot"],
-    "EURJPYm": ["cot"],
-    "GBPJPYm": ["cot"],
+    _sym("BTCUSD"): ["crypto_fng", "cot"],
+    _sym("US500"):  ["vix", "cot"],
+    _sym("USTEC"):  ["vix"],
+    _sym("DE40"):   ["vix"],
+    _sym("XAUUSD"): ["vix", "cot"],
+    _sym("XAGUSD"): ["vix", "cot"],
+    _sym("USOIL"):  ["vix", "cot"],
+    _sym("EURUSD"): ["cot"],
+    _sym("GBPUSD"): ["cot"],
+    _sym("USDJPY"): ["cot"],
+    _sym("EURJPY"): ["cot"],
+    _sym("GBPJPY"): ["cot"],
 }
 
 
