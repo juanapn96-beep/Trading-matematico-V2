@@ -182,6 +182,14 @@ def deterministic_decision(
             reasons.append("COT=BEAR✓")
 
     # ═══ DECISIÓN FINAL ═══
+    # Apply hurst_penalty if present (set by main.py in SCALPING_ONLY mode)
+    hurst_penalty = float(indicators.get("hurst_penalty", 0.0) or 0.0)
+    if hurst_penalty > 0:
+        score -= hurst_penalty
+        reasons.append(f"hurst_pen=-{hurst_penalty:.1f}")
+
+    # min_decision_score: minimum score to open a trade (default 5.0 out of max 10.0).
+    # Lower to 4.0 for more aggressive scalping; raise to 6.0 for higher quality signals.
     min_score = sym_cfg.get("min_decision_score", 5.0)
     confidence = max(1, min(10, int(score)))
     reason_str = " | ".join(reasons)

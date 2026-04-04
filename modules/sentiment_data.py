@@ -279,8 +279,8 @@ def _get_cot_for_symbol(symbol: str) -> Optional[dict]:
 SYMBOL_SENTIMENT_MAP = {
     _sym("BTCUSD"): ["crypto_fng", "cot"],
     _sym("US500"):  ["vix", "cot"],
-    "USTEC":        ["vix"],
-    "DE40":         ["vix"],
+    _sym("USTEC"):  ["vix"],
+    _sym("DE40"):   ["vix"],
     _sym("XAUUSD"): ["vix", "cot"],
     _sym("XAGUSD"): ["vix", "cot"],
     _sym("USOIL"):  ["vix", "cot"],

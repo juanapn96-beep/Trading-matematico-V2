@@ -924,7 +924,7 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
     Maintains backward compatibility with callers expecting {"action", "confidence", ...}.
     """
     # ── Deterministic path (default, no Groq key required) ───────
-    if not groq_clients or not getattr(cfg, "GROQ_API_KEY", ""):
+    if not groq_clients:
         state = _symbol_state.get(symbol, {})
         direction = state.get("mem_direction", "")
         indicators = state.get("last_indicators", {})
@@ -2313,7 +2313,6 @@ def _process_symbol(
     # ── Store context for deterministic decision engine ───────────
     if symbol not in _symbol_state:
         _symbol_state[symbol] = {}
-    _symbol_state[symbol]["last_indicators"] = ind
     _symbol_state[symbol]["last_sr_context"] = (
         sr_ctx.__dict__ if hasattr(sr_ctx, "__dict__") else sr_ctx
     )
@@ -2325,9 +2324,11 @@ def _process_symbol(
     if not hurst_allowed:
         if getattr(cfg, "SCALPING_ONLY", False):
             # In scalping mode, low Hurst is a score penalty, not a hard block
-            hurst_penalty = (min_hurst - hurst_val) * 5  # up to ~2 point penalty
+            hurst_penalty = round((min_hurst - hurst_val) * 5, 2)
             log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — penalty={hurst_penalty:.1f} (scalping mode)")
             _set_symbol_status(symbol, f"📉 Hurst scalp penalizado {hurst_val:.2f}")
+            # Propagate penalty into indicators so decision_engine can apply it
+            ind["hurst_penalty"] = hurst_penalty
             _symbol_state[symbol]["hurst_penalty"] = hurst_penalty
             # Continue processing (don't skip)
         else:
@@ -2336,7 +2337,11 @@ def _process_symbol(
             _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
             return
     else:
+        ind["hurst_penalty"] = 0.0
         _symbol_state[symbol]["hurst_penalty"] = 0.0
+
+    # Store updated indicators (with hurst_penalty) for decision engine
+    _symbol_state[symbol]["last_indicators"] = ind
     if hurst_val < min_hurst:
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
         _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")

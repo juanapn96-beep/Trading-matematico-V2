@@ -156,7 +156,7 @@ SYMBOL_TO_CURRENCIES = {
     _sym("EURUSD"): ["EUR","USD"], _sym("GBPUSD"): ["GBP","USD"],
     _sym("USDJPY"): ["USD","JPY"], _sym("GBPJPY"): ["GBP","JPY"],
     _sym("XAGUSD"): ["XAG","USD"], _sym("USOIL"):  ["OIL","USD"],
-    "USTEC":        ["USD"],        "DE40":         ["EUR"],
+    _sym("USTEC"):  ["USD"],        _sym("DE40"):   ["EUR"],
     _sym("EURJPY"): ["EUR","JPY"], _sym("BTCUSD"):  ["BTC","USD"],
 }
 
