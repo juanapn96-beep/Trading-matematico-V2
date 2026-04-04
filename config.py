@@ -192,6 +192,13 @@ SYMBOLS = {
         ),
         "session_start":  0,
         "session_end":    24,
+        "max_spread_pips": 5.0,    # Oro: spread natural más alto
+        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
+            "asian":  0.6,         # 0-7 UTC
+            "london": 1.0,         # 7-13 UTC
+            "ny":     1.0,         # 13-21 UTC
+            "dead":   0.3,         # 21-24 UTC
+        },
         "sl_atr_mult":    2.0,
         "tp_atr_mult_buy":  3.5,
         "tp_atr_mult_sell": 3.5,   # TP simétrico — R:R = 1.75
@@ -232,6 +239,13 @@ SYMBOLS = {
         ),
         "session_start":  0,
         "session_end":    24,
+        "max_spread_pips": 2.0,    # EUR/USD: par más líquido, spread bajo
+        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
+            "asian":  0.3,         # 0-7 UTC
+            "london": 1.0,         # 7-13 UTC
+            "ny":     0.8,         # 13-21 UTC
+            "dead":   0.2,         # 21-24 UTC
+        },
         "sl_atr_mult":    1.5,
         "tp_atr_mult_buy":  3.0,
         "tp_atr_mult_sell": 3.0,   # TP simétrico — R:R = 2.0
@@ -271,6 +285,13 @@ SYMBOLS = {
         ),
         "session_start":  0,
         "session_end":    24,
+        "max_spread_pips": 3.0,    # GBP/USD: spreads moderados en Cable
+        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
+            "asian":  0.2,         # 0-7 UTC
+            "london": 1.0,         # 7-13 UTC
+            "ny":     0.7,         # 13-21 UTC
+            "dead":   0.2,         # 21-24 UTC
+        },
         "sl_atr_mult":    2.0,
         "tp_atr_mult_buy":  3.5,
         "tp_atr_mult_sell": 3.5,   # TP simétrico — R:R = 1.75
@@ -311,6 +332,13 @@ SYMBOLS = {
         ),
         "session_start":  0,
         "session_end":    24,
+        "max_spread_pips": 4.0,    # S&P 500: CFD índice, spread variable
+        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
+            "asian":  0.3,         # 0-7 UTC
+            "london": 0.5,         # 7-13 UTC
+            "ny":     1.0,         # 13-21 UTC
+            "dead":   0.2,         # 21-24 UTC
+        },
         "sl_atr_mult":    1.8,
         "tp_atr_mult_buy":  3.0,
         "tp_atr_mult_sell": 3.0,   # TP simétrico — R:R = 1.67
@@ -351,6 +379,13 @@ SYMBOLS = {
         ),
         "session_start":  0,
         "session_end":    24,
+        "max_spread_pips": 8.0,    # BTC: crypto, spread alto es normal
+        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
+            "asian":  0.7,         # 0-7 UTC
+            "london": 0.8,         # 7-13 UTC
+            "ny":     1.0,         # 13-21 UTC
+            "dead":   0.6,         # 21-24 UTC
+        },
         "sl_atr_mult":    3.0,
         "tp_atr_mult_buy":  5.0,
         "tp_atr_mult_sell": 5.0,   # TP simétrico — R:R = 1.67

@@ -698,7 +698,8 @@ def init_db():
             session        TEXT,
             risk_amount    REAL,
             sl             REAL,
-            tp             REAL
+            tp             REAL,
+            slippage_pips  REAL
         );
 
         CREATE TABLE IF NOT EXISTS feature_vectors (
@@ -741,6 +742,7 @@ def init_db():
         ("trades",          "risk_amount",     "REAL"),
         ("trades",          "sl",              "REAL"),
         ("trades",          "tp",              "REAL"),
+        ("trades",          "slippage_pips",   "REAL"),
         ("feature_vectors", "reward",          "REAL"),
         ("ml_models",       "attention_json",  "TEXT"),
         ("ml_models",       "ensemble_weights","TEXT"),
@@ -995,6 +997,7 @@ def save_trade(
     risk_amount: Optional[float] = None,
     sl: Optional[float] = None,
     tp: Optional[float] = None,
+    slippage_pips: float = 0.0,
 ) -> Optional[int]:
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
@@ -1002,12 +1005,12 @@ def save_trade(
         INSERT OR IGNORE INTO trades
             (ticket, symbol, direction, open_price, volume,
              opened_at, features_json, reason_gemini, hilbert_signal, hurst_val,
-             setup_id, setup_score, session, regime, risk_amount, sl, tp)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+             setup_id, setup_score, session, regime, risk_amount, sl, tp, slippage_pips)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
     """, (ticket, symbol, direction, open_price, volume,
           datetime.now(timezone.utc).isoformat(),
           json.dumps(asdict(features)), reason_gemini, hilbert_signal, hurst_val,
-          setup_id, setup_score, session, regime, risk_amount, sl, tp))
+          setup_id, setup_score, session, regime, risk_amount, sl, tp, slippage_pips))
     trade_id = cur.lastrowid
     con.commit()
     con.close()
