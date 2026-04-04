@@ -18,7 +18,6 @@
 
 import sys
 import time
-import json
 import math
 import threading
 import re
@@ -33,12 +32,6 @@ try:
     import MetaTrader5 as mt5
 except ImportError:
     print("❌  pip install MetaTrader5"); sys.exit(1)
-
-try:
-    from groq import Groq
-    _GROQ_AVAILABLE = True
-except ImportError:
-    _GROQ_AVAILABLE = False
 
 import config as cfg
 from modules.indicators        import compute_all
@@ -90,23 +83,7 @@ logging.basicConfig(
 )
 log = logging.getLogger(__name__)
 
-# ── Groq ────────────────────────────────────────────────────────
-def _build_groq_client(api_key: str):
-    if not _GROQ_AVAILABLE:
-        return None
-    max_retries = int(getattr(cfg, "GROQ_CLIENT_MAX_RETRIES", 0) or 0)
-    try:
-        return Groq(api_key=api_key, max_retries=max_retries)
-    except TypeError:
-        return Groq(api_key=api_key)
-
-
-_groq_keys = getattr(cfg, "GROQ_API_KEYS", []) or []
-groq_clients = [
-    _build_groq_client(api_key)
-    for api_key in _groq_keys
-    if api_key
-]
+# ── Motor de decisión determinista ──────────────────────────────
 
 # ── TF Map MT5 ───────────────────────────────────────────────────
 TF_MAP = {
@@ -162,15 +139,11 @@ trade_mode_cache: dict = {}
 _profit_candle_count: dict = {}
 _profit_candle_last_seen: dict = {}
 pending_closure_tickets: set = set()
-last_groq_analysis: dict = {}
+last_decision_analysis: dict = {}
 web_status_snapshot: dict = {}
 state_lock = threading.RLock()
-groq_cooldown_until: float = 0.0
-groq_call_cache: dict = {}
-groq_key_cooldowns: dict = {}
-groq_symbol_cooldowns: dict = {}
-groq_key_cursor: int = 0
-groq_usage_stats: dict = {
+decision_call_cache: dict = {}
+decision_usage_stats: dict = {
     "api_calls_total": 0,
     "api_success_total": 0,
     "cache_hits_total": 0,
@@ -183,10 +156,8 @@ groq_usage_stats: dict = {
     "errors_total": 0,
     "key_rotations_total": 0,
 }
-groq_hourly_usage: dict = {}
-groq_daily_usage: dict = {}
-groq_hourly_usage_by_key: dict = {}
-groq_daily_usage_by_key: dict = {}
+decision_hourly_usage: dict = {}
+decision_daily_usage: dict = {}
 shared_news_cache = None
 shared_news_last_update: float = 0.0
 
@@ -203,12 +174,12 @@ def _set_symbol_status(symbol: str, status: str):
     symbol_status_cache[symbol] = status
 
 
-def _set_last_groq_analysis(symbol: str, analysis: Optional[dict]):
-    global last_groq_analysis
+def _set_last_decision_analysis(symbol: str, analysis: Optional[dict]):
+    global last_decision_analysis
     if not analysis:
         return
     with state_lock:
-        last_groq_analysis = {
+        last_decision_analysis = {
             "symbol": symbol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "decision": analysis.get("decision", "HOLD"),
@@ -219,107 +190,47 @@ def _set_last_groq_analysis(symbol: str, analysis: Optional[dict]):
         }
 
 
-def _bump_groq_metric(metric: str, key_idx: Optional[int] = None):
+def _bump_decision_metric(metric: str):
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     with state_lock:
-        groq_usage_stats[metric] = int(groq_usage_stats.get(metric, 0)) + 1
+        decision_usage_stats[metric] = int(decision_usage_stats.get(metric, 0)) + 1
         if metric == "api_calls_total":
-            groq_hourly_usage[hour_key] = int(groq_hourly_usage.get(hour_key, 0)) + 1
-            groq_daily_usage[day_key] = int(groq_daily_usage.get(day_key, 0)) + 1
-            if key_idx is not None:
-                hourly_by_key = groq_hourly_usage_by_key.setdefault(key_idx, {})
-                daily_by_key = groq_daily_usage_by_key.setdefault(key_idx, {})
-                hourly_by_key[hour_key] = int(hourly_by_key.get(hour_key, 0)) + 1
-                daily_by_key[day_key] = int(daily_by_key.get(day_key, 0)) + 1
+            decision_hourly_usage[hour_key] = int(decision_hourly_usage.get(hour_key, 0)) + 1
+            decision_daily_usage[day_key] = int(decision_daily_usage.get(day_key, 0)) + 1
 
-            while len(groq_hourly_usage) > 72:
-                oldest = sorted(groq_hourly_usage.keys())[0]
-                groq_hourly_usage.pop(oldest, None)
-            while len(groq_daily_usage) > 14:
-                oldest = sorted(groq_daily_usage.keys())[0]
-                groq_daily_usage.pop(oldest, None)
-            if key_idx is not None:
-                while len(groq_hourly_usage_by_key.get(key_idx, {})) > 72:
-                    oldest = sorted(groq_hourly_usage_by_key[key_idx].keys())[0]
-                    groq_hourly_usage_by_key[key_idx].pop(oldest, None)
-                while len(groq_daily_usage_by_key.get(key_idx, {})) > 14:
-                    oldest = sorted(groq_daily_usage_by_key[key_idx].keys())[0]
-                    groq_daily_usage_by_key[key_idx].pop(oldest, None)
+            while len(decision_hourly_usage) > 72:
+                oldest = sorted(decision_hourly_usage.keys())[0]
+                decision_hourly_usage.pop(oldest, None)
+            while len(decision_daily_usage) > 14:
+                oldest = sorted(decision_daily_usage.keys())[0]
+                decision_daily_usage.pop(oldest, None)
 
 
-def _get_groq_metrics_snapshot() -> dict:
+def _get_decision_metrics_snapshot() -> dict:
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     with state_lock:
         return {
-            **groq_usage_stats,
-            "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
-            "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
-            "configured_keys": len(groq_clients),
-            "per_key_budget": _format_groq_key_budget_status(),
-            "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
+            **decision_usage_stats,
+            "api_calls_current_hour": int(decision_hourly_usage.get(hour_key, 0)),
+            "api_calls_current_day": int(decision_daily_usage.get(day_key, 0)),
+            "engine": "deterministic",
         }
 
 
-def _get_groq_metrics_snapshot_unlocked() -> dict:
+def _get_decision_metrics_snapshot_unlocked() -> dict:
     now = datetime.now(timezone.utc)
     hour_key = now.strftime("%Y-%m-%d %H")
     day_key = now.strftime("%Y-%m-%d")
     return {
-        **groq_usage_stats,
-        "api_calls_current_hour": int(groq_hourly_usage.get(hour_key, 0)),
-        "api_calls_current_day": int(groq_daily_usage.get(day_key, 0)),
-        "configured_keys": len(groq_clients),
-        "per_key_budget": _format_groq_key_budget_status(),
-        "cooldown_until": datetime.fromtimestamp(groq_cooldown_until, tz=timezone.utc).isoformat() if groq_cooldown_until > time.time() else "",
+        **decision_usage_stats,
+        "api_calls_current_hour": int(decision_hourly_usage.get(hour_key, 0)),
+        "api_calls_current_day": int(decision_daily_usage.get(day_key, 0)),
+        "engine": "deterministic",
     }
-
-
-def _get_groq_key_usage_snapshot(key_idx: int) -> tuple:
-    now = datetime.now(timezone.utc)
-    hour_key = now.strftime("%Y-%m-%d %H")
-    day_key = now.strftime("%Y-%m-%d")
-    with state_lock:
-        hour_calls = int(groq_hourly_usage_by_key.get(key_idx, {}).get(hour_key, 0))
-        day_calls = int(groq_daily_usage_by_key.get(key_idx, {}).get(day_key, 0))
-    return hour_calls, day_calls
-
-
-def _is_groq_key_budget_available(key_idx: int) -> tuple:
-    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
-    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
-    hour_calls, day_calls = _get_groq_key_usage_snapshot(key_idx)
-    hour_ok = max_calls_hour <= 0 or hour_calls < max_calls_hour
-    day_ok = max_calls_day <= 0 or day_calls < max_calls_day
-    return (hour_ok and day_ok), hour_calls, day_calls
-
-
-def _format_groq_key_budget_status() -> str:
-    max_calls_hour = int(getattr(cfg, "GROQ_MAX_CALLS_PER_HOUR", 0) or 0)
-    max_calls_day = int(getattr(cfg, "GROQ_MAX_CALLS_PER_DAY", 0) or 0)
-    parts = []
-    for key_idx in range(len(groq_clients)):
-        hour_calls, day_calls = _get_groq_key_usage_snapshot(key_idx)
-        hour_limit = max_calls_hour if max_calls_hour > 0 else "-"
-        day_limit = max_calls_day if max_calls_day > 0 else "-"
-        parts.append(f"k{key_idx+1}:h {hour_calls}/{hour_limit}, d {day_calls}/{day_limit}")
-    return " | ".join(parts) if parts else "sin keys"
-
-
-def _build_groq_fallback_decision(reason: str) -> dict:
-    _bump_groq_metric("fallback_holds_total")
-    fallback = {
-        "decision": "HOLD",
-        "confidence": 0,
-        "reason": reason,
-        "key_signals": ["fallback_system", "groq_unavailable"],
-        "main_risk": "Groq no disponible para validar noticias y sentimiento",
-    }
-    _set_last_groq_analysis("SYSTEM", fallback)
-    return fallback
 
 
 def _serialize_position_for_web(pos: dict) -> dict:
@@ -431,8 +342,8 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "memory": mem_stats,
             "news": news_payload,
             "shared_news_fetched_at": getattr(shared_news_cache, "fetched_at", "") if shared_news_cache is not None else "",
-            "groq_metrics": _get_groq_metrics_snapshot_unlocked(),
-            "last_groq_analysis": dict(last_groq_analysis),
+            "decision_metrics": _get_decision_metrics_snapshot_unlocked(),
+            "last_decision_analysis": dict(last_decision_analysis),
             "performance": perf_payload,
             "portfolio_risk": portfolio_payload,
         }
@@ -452,17 +363,7 @@ def _get_last_candle_stamp(df: pd.DataFrame) -> str:
     return ts.isoformat()
 
 
-def _extract_retry_delay_seconds(err_str: str) -> float:
-    match = re.search(r"retry in\s+([0-9.]+)s", err_str, re.IGNORECASE)
-    if not match:
-        return 60.0
-    try:
-        return max(1.0, float(match.group(1)))
-    except Exception:
-        return 60.0
-
-
-def _build_groq_cache_key(symbol: str, direction_hint: str, candle_stamp: str, ind: dict) -> str:
+def _build_decision_cache_key(symbol: str, direction_hint: str, candle_stamp: str, ind: dict) -> str:
     conf_total = round(float(ind.get("confluence", {}).get("total", 0.0) or 0.0), 2)
     h1_trend = ind.get("h1_trend", "LATERAL")
     hilbert_signal = ind.get("hilbert", {}).get("signal", "NEUTRAL")
@@ -474,49 +375,6 @@ def _build_groq_cache_key(symbol: str, direction_hint: str, candle_stamp: str, i
         hilbert_signal,
         f"{conf_total:.2f}",
     ])
-
-
-def _get_groq_symbol_cooldown_remaining(symbol: str, now_ts: Optional[float] = None) -> int:
-    now_ts = time.time() if now_ts is None else now_ts
-    until_ts = float(groq_symbol_cooldowns.get(symbol, 0.0) or 0.0)
-    if until_ts <= now_ts:
-        groq_symbol_cooldowns.pop(symbol, None)
-        return 0
-    return int(max(1, math.ceil(until_ts - now_ts)))
-
-
-def _set_groq_symbol_cooldown(symbol: str, seconds: Optional[float] = None):
-    cooldown_sec = int(
-        seconds
-        if seconds is not None
-        else (getattr(cfg, "GROQ_SYMBOL_COOLDOWN_SEC", 0) or 0)
-    )
-    if cooldown_sec <= 0:
-        return
-    groq_symbol_cooldowns[symbol] = time.time() + cooldown_sec
-
-
-def _select_groq_client(now_ts: float, excluded: Optional[set] = None):
-    global groq_key_cursor
-    excluded = excluded or set()
-    if not groq_clients:
-        return None, None
-
-    total = len(groq_clients)
-    for offset in range(total):
-        idx = (groq_key_cursor + offset) % total
-        if idx in excluded:
-            continue
-        budget_ok, _, _ = _is_groq_key_budget_available(idx)
-        if not budget_ok:
-            continue
-        cooldown_until = float(groq_key_cooldowns.get(idx, 0.0) or 0.0)
-        if cooldown_until > now_ts:
-            continue
-        groq_key_cursor = (idx + 1) % total
-        return idx, groq_clients[idx]
-    return None, None
-
 
 def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> Optional[dict]:
     tick = mt5.symbol_info_tick(symbol)
@@ -635,16 +493,16 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
     return True, ""
 
 
-def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
+def _is_decision_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cfg: dict) -> tuple:
     plan = _compute_trade_plan(symbol, action, ind, sym_cfg)
     if plan is None:
         return False, "⚠️ Tick no disponible", None
 
     # FIX v7.0: Aplicar SCALPING_TP_MULT ANTES del R:R check para ser coherente
     # con _execute_decision (que aplica el mismo mult al abrir la orden).
-    # Sin esta corrección, Groq era consultado en setups SELL con R:R=1.20 base,
-    # pero al ejecutar el mult 0.82 el R:R caía a ~0.98 → rechazado post-Groq.
-    # Desperdicio de llamadas API + sesgo BUY (BUY sobrevivía, SELL no).
+    # Sin esta corrección, se aprobaban setups SELL con R:R base (sin ajuste scalp),
+    # pero al ejecutar el mult de scalping el R:R real caía y se rechazaban después.
+    # Esto generaba sesgo BUY por desalineación entre validación y ejecución.
     if bool(getattr(cfg, "SCALPING_ONLY", False)):
         scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.98) or 0.98)
         scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
@@ -682,7 +540,7 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
         cycle_ok = hilbert_signal != "LOCAL_MIN"
         trend_ok = ("BAJISTA" in trend) or vote_edge >= 2
 
-    # ── HARD GATE: Sin confluencia suficiente NO se consulta Groq ──
+    # ── HARD GATE: Sin confluencia suficiente NO se procesa decisión ──
     if not conf_ok:
         return False, (
             f"🔒 Confluencia insuficiente {action}: "
@@ -691,7 +549,7 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
 
     support_ok = sniper_aligned or in_strong_zone or abs(conf_total) >= (conf_min * 1.8)
     quality_score = sum([cycle_ok, trend_ok, support_ok])
-    min_quality = max(2, int(getattr(cfg, "GROQ_MIN_ENTRY_QUALITY", 3) or 3))
+    min_quality = max(2, int(getattr(cfg, "DECISION_MIN_ENTRY_QUALITY", 3) or 3))
 
     if quality_score < min_quality:
         return False, (
@@ -703,8 +561,8 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     if not strategy_ok:
         return False, f"🧭 {strategy_reason}", plan
 
-    strong_entry_required = bool(getattr(cfg, "GROQ_ENTRY_STRONG_ONLY", True))
-    premium_conf_mult = float(getattr(cfg, "GROQ_ENTRY_CONF_MULT", 1.8) or 1.8)
+    strong_entry_required = bool(getattr(cfg, "DECISION_ENTRY_STRONG_ONLY", True))
+    premium_conf_mult = float(getattr(cfg, "DECISION_ENTRY_CONF_MULT", 2.0) or 2.0)
     premium_conf_ok = abs(conf_total) >= (conf_min * premium_conf_mult)
     hilbert_extreme_ok = (
         (action == "BUY" and hilbert_signal == "LOCAL_MIN")
@@ -797,324 +655,46 @@ def get_open_positions_count_realtime() -> int:
     return sum(1 for p in positions if p.magic == cfg.MAGIC_NUMBER)
 
 
-# ════════════════════════════════════════════════════════════════
-#  GROQ — CON RETRY EXPONENCIAL
-# ════════════════════════════════════════════════════════════════
+def ask_decision_engine(symbol: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+    """Motor de decisión determinista con cache por vela/señal."""
+    if cache_key and cache_key in decision_call_cache:
+        _bump_decision_metric("cache_hits_total")
+        return decision_call_cache[cache_key]
 
-SYSTEM_PROMPT_BASE = """
-Eres ZAR — un algoritmo de trading institucional de precisión matemática.
-Tu única función es analizar el contexto de mercado y decidir: BUY, SELL o HOLD.
-Responde SIEMPRE con JSON exacto, nada más.
+    state = _symbol_state.get(symbol, {})
+    direction = state.get("mem_direction", "")
+    indicators = state.get("last_indicators", {})
+    sr_context = state.get("last_sr_context", {})
+    news_ctx = state.get("last_news_context", None)
 
-REGLA 1 — TENDENCIA (7 niveles — lee con cuidado):
-  ALCISTA_FUERTE   → BUY fuertemente favorecido. Solo SELL si hay señal extrema contraria.
-  ALCISTA          → BUY es la dirección correcta. Confirmar con S/R o momentum.
-  LATERAL_ALCISTA  → Señales mayoritariamente alcistas. BUY desde soporte fuerte o con 3+ confirmaciones.
-  LATERAL          → Sin dirección clara. BUY/SELL SOLO si estás EN soporte/resistencia fuerte (strength>5).
-                     Si no hay S/R fuerte cercano → HOLD.
-  LATERAL_BAJISTA  → Señales mayoritariamente bajistas. SELL desde resistencia fuerte o con 3+ confirmaciones.
-  BAJISTA          → SELL es la dirección correcta. Confirmar con S/R o momentum.
-  BAJISTA_FUERTE   → SELL fuertemente favorecido. Solo BUY si hay señal extrema contraria.
+    if not direction:
+        payload = {"decision": "HOLD", "confidence": 1, "reason": "Sin dirección"}
+        if cache_key:
+            decision_call_cache[cache_key] = payload
+        return payload
 
-  trend_votes muestra cuántos de 6 indicadores votan alcista (bull) vs bajista (bear).
-
-REGLA 2 — ZONAS S/R FUERTES:
-  En soporte (strength>5): BUY si hay confirmación de momentum
-  En resistencia (strength>5): SELL si hay confirmación de momentum
-  in_strong_zone=True: zona de alta probabilidad — aumenta confianza
-
-REGLA 3 — CONFLUENCIA MÍNIMA (al menos 4 de 6 — AUMENTADO a 4):
-  ✓ DEMA cross o posición (fast>slow = alcista)
-  ✓ MACD histograma en dirección correcta
-  ✓ RSI no en zona opuesta extrema
-  ✓ Heiken Ashi en dirección correcta
-  ✓ SuperTrend en dirección correcta
-  ✓ Kalman trend en dirección correcta
-
-  IMPORTANTE: Si SuperTrend y Kalman CONTRADICEN la dirección → HOLD obligatorio.
-  Ambos deben confirmar la dirección del trade.
-
-REGLA 4 — RSI EXTREMOS:
-  RSI > overbought → NO BUY. RSI < oversold → NO SELL.
-  Excepción: RSI extremo en S/R fuerte puede confirmar divergencia.
-
-REGLA 5 — NOTICIAS Y CALENDARIO:
-  Si should_pause=True → HOLD siempre. Sin excepción.
-
-REGLA 6 — MEMORIA NEURAL:
-  Si should_block=True → HOLD.
-  confidence_adj > 0 → patrón ganador similar.
-  confidence_adj < 0 → patrón perdedor similar.
-
-REGLA 7 — R:R MÍNIMO:
-  R:R < 1.5 → HOLD. R:R 1.5-2.0 = aceptable. R:R > 2.5 = excelente.
-
-REGLA 8 — HILBERT TRANSFORM:
-  LOCAL_MAX (sine > 0.85) → NO BUY. Techo del ciclo.
-  LOCAL_MIN (sine < -0.85) → NO SELL. Suelo del ciclo.
-  BUY_CYCLE → Favorece BUY.
-  SELL_CYCLE → Favorece SELL.
-
-REGLA 9 — FISHER TRANSFORM:
-  Fisher > +2.0 → sobrecomprado → precaución BUY.
-  Fisher < -2.0 → sobrevendido → precaución SELL.
-
-REGLA 10 — HURST EXPONENT:
-  Hurst > 0.6 → tendencia persistente → seguir agresivamente.
-  Hurst 0.45-0.6 → mixto → requerir S/R adicional.
-  Hurst < 0.45 → reversión → usar S/R como criterio principal.
-
-REGLA 11 — CICLO ADAPTATIVO:
-  cycle_phase = TECHO → favorece SELL.
-  cycle_phase = SUELO → favorece BUY.
-  cycle_phase = TRANSICION → esperar confirmación.
-
-REGLA 12 — REGRESIÓN LINEAL:
-  lr_r2 > 0.7 → tendencia estadísticamente robusta.
-  lr_r2 < 0.4 → usar S/R, no la tendencia lineal.
-
-REGLA 13 — ANTI-CONTRA-TENDENCIA (NUEVO — CRÍTICO):
-  Si la dirección propuesta CONTRADICE a SuperTrend + Kalman simultáneamente → HOLD.
-  Si la dirección propuesta CONTRADICE a 4 o más indicadores primarios → HOLD.
-  El bot tuvo el 97% de trades en breakeven por entrar contra la tendencia.
-  Solo operar cuando la dirección está ALINEADA con la mayoría de indicadores.
-
-REGLA 14 — PILAR 3: MICROESTRUCTURA (NUEVO — FASE 1):
-  Volume Profile (POC/VAH/VAL basado en tick-volume de Exness):
-    Precio > POC → sesgo alcista. Precio < POC → sesgo bajista.
-    Precio > VAH → breakout bullish (fuerte). Precio < VAL → breakdown bearish (fuerte).
-    Precio dentro del Value Area (VAL–VAH) → zona de equilibrio, menor edge.
-  Session VWAP (VWAP anclado por sesión UTC):
-    Precio sobre S-VWAP → sesgo alcista. Precio bajo S-VWAP → sesgo bajista.
-    Desviación S-VWAP > 0.5 % → posible reversión a VWAP antes del TP.
-  Fair Value Gaps (FVG / Imbalances):
-    FVG Bullish activo (fvg_bull): precio entrando en el gap desde arriba → SOPORTE. Favorece BUY.
-    FVG Bearish activo (fvg_bear): precio llegando al gap desde abajo → RESISTENCIA. Favorece SELL.
-    FVG mitigado: ya NO es soporte/resistencia válido.
-
-REGLA 15 — CONFLUENCIA DE 3 PILARES (SNIPER — NUEVO — FASE 1):
-  El bot evalúa 3 pilares independientes para cada señal:
-    P1 (Estadístico): votos de tendencia de indicadores técnicos.
-    P2 (Matemático):  Hilbert + Hurst + Kalman + Fisher + Ciclo Adaptativo.
-    P3 (Microestructura): POC + Session VWAP + FVG (calculado arriba).
-  confluence.total en [-3, +3]:
-    >= +1.0 → BULLISH fuerte. <= -1.0 → BEARISH fuerte. Entre → neutral/débil.
-  confluence.sniper_aligned = True → los 3 pilares apuntan en la MISMA dirección.
-    → Alta probabilidad de éxito. Aumentar confianza en 1 punto.
-  confluence.sniper_aligned = False → pilares en desacuerdo.
-    → Si conf.total < 0.5, reducir confianza. Si conf.total < 0.0 en la dirección → HOLD.
-  NUNCA ejecutar BUY si confluence.total < -0.5 (todos los pilares en contra).
-  NUNCA ejecutar SELL si confluence.total > 0.5 (todos los pilares en contra).
-
-FORMATO (JSON exacto, sin markdown, sin texto extra):
-{
-  "decision": "BUY" | "SELL" | "HOLD",
-  "confidence": 1-10,
-  "reason": "explicación concisa en español (máx 150 palabras)",
-  "key_signals": ["señal1", "señal2", "señal3"],
-  "main_risk": "principal riesgo de este trade"
-}
-"""
-
-
-def get_system_prompt(sym_cfg: dict) -> str:
-    extra         = sym_cfg.get("strategy_extra_rules", "")
-    strategy_type = sym_cfg.get("strategy_type", "HYBRID")
-    if not extra:
-        return SYSTEM_PROMPT_BASE
-    return SYSTEM_PROMPT_BASE + (
-        f"\n\n{'='*60}\n"
-        f"ESTRATEGIA ESPECÍFICA — {strategy_type}:\n"
-        f"{'='*60}\n"
-        f"{extra}\n"
-        f"{'='*60}\n"
-        f"Aplica estas reglas ADICIONALES junto con las reglas base.\n"
+    _bump_decision_metric("api_calls_total")
+    result = deterministic_decision(
+        symbol=symbol,
+        direction=direction,
+        indicators=indicators,
+        sr_context=sr_context,
+        news_context=news_ctx,
+        sym_cfg=sym_cfg,
     )
-
-
-def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
-    """
-    Decision gateway: uses deterministic engine by default (no Groq key needed).
-    If GROQ_API_KEY is configured and groq is available, delegates to the Groq LLM.
-    Maintains backward compatibility with callers expecting {"action", "confidence", ...}.
-    """
-    # ── Deterministic path (default, no Groq key required) ───────
-    if not groq_clients:
-        state = _symbol_state.get(symbol, {})
-        direction = state.get("mem_direction", "")
-        indicators = state.get("last_indicators", {})
-        sr_context = state.get("last_sr_context", {})
-        news_ctx = state.get("last_news_context", None)
-
-        if not direction:
-            log.debug(f"[decision] {symbol}: sin dirección pre-calculada → HOLD")
-            return {"decision": "HOLD", "confidence": 1, "reason": "Sin dirección"}
-
-        result = deterministic_decision(
-            symbol=symbol,
-            direction=direction,
-            indicators=indicators,
-            sr_context=sr_context,
-            news_context=news_ctx,
-            sym_cfg=sym_cfg,
-        )
-        return {
-            "decision": result["decision"],
-            "confidence": result["confidence"],
-            "reason": result.get("reason", ""),
-            "score": result.get("score", 0.0),
-        }
-
-    # ── Groq LLM path (only when GROQ_API_KEY is set) ────────────
-    return _ask_groq_llm(symbol, context, sym_cfg, cache_key)
-
-
-def _ask_groq_llm(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
-    """Original Groq LLM call — only invoked when GROQ_API_KEY is configured."""
-    system_prompt = get_system_prompt(sym_cfg)
-    global groq_cooldown_until, groq_call_cache
-
-    now_ts = time.time()
-    if cache_key and cache_key in groq_call_cache:
-        _bump_groq_metric("cache_hits_total")
-        return groq_call_cache[cache_key]
-
-    symbol_wait_left = _get_groq_symbol_cooldown_remaining(symbol, now_ts)
-    if symbol_wait_left > 0:
-        log.info(f"[groq] Cooldown por simbolo activo - omitiendo consulta {symbol} ({symbol_wait_left}s restantes)")
-        _bump_groq_metric("symbol_cooldown_skips_total")
-        fallback = _build_groq_fallback_decision(
-            f"Cooldown Groq por simbolo ({symbol_wait_left}s restantes)"
-        )
-        if cache_key:
-            groq_call_cache[cache_key] = fallback
-        return fallback
-
-    if now_ts < groq_cooldown_until:
-        wait_left = int(max(1, groq_cooldown_until - now_ts))
-        log.warning(f"[groq] Cooldown global activo — omitiendo consulta {symbol} ({wait_left}s restantes)")
-        _bump_groq_metric("cooldown_skips_total")
-        fallback = _build_groq_fallback_decision(f"Cooldown Groq activo ({wait_left}s restantes)")
-        _set_groq_symbol_cooldown(symbol, seconds=wait_left)
-        if cache_key:
-            groq_call_cache[cache_key] = fallback
-        return fallback
-
-    budget_ready_keys = []
-    for key_idx in range(len(groq_clients)):
-        budget_ok, _, _ = _is_groq_key_budget_available(key_idx)
-        if budget_ok:
-            budget_ready_keys.append(key_idx)
-
-    if groq_clients and not budget_ready_keys:
-        limit_reason = f"Presupuesto Groq agotado en todas las keys ({_format_groq_key_budget_status()})"
-        log.warning(f"[groq] {limit_reason} - omitiendo consulta {symbol}")
-        _bump_groq_metric("skipped_by_budget_total")
-        fallback = _build_groq_fallback_decision(limit_reason)
-        _set_groq_symbol_cooldown(symbol)
-        if cache_key:
-            groq_call_cache[cache_key] = fallback
-        return fallback
-
-    max_attempts = max(1, len(groq_clients))
-    tried_keys = set()
-    while len(tried_keys) < max(1, len(groq_clients)):
-        client_idx, client = _select_groq_client(time.time(), excluded=tried_keys)
-        if client is None:
-            break
-        tried_keys.add(client_idx)
-        attempt = len(tried_keys)
-        try:
-            _bump_groq_metric("api_calls_total", key_idx=client_idx)
-            response = client.chat.completions.create(
-                model=cfg.GROQ_MODEL,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user",   "content": context},
-                ],
-                temperature=0.2,   # bajo para decisiones deterministas de trading
-                max_tokens=512,    # suficiente para el JSON de respuesta (~150 palabras)
-                response_format={"type": "json_object"},  # fuerza JSON válido; fallback de parseo por compatibilidad
-            )
-            raw = response.choices[0].message.content.strip()
-            if "```json" in raw:
-                raw = raw.split("```json")[1].split("```")[0].strip()
-            elif "```" in raw:
-                raw = raw.split("```")[1].strip()
-            payload = json.loads(raw)
-            _set_last_groq_analysis(symbol, payload)
-            _bump_groq_metric("api_success_total")
-            _set_groq_symbol_cooldown(symbol)
-            if cache_key:
-                groq_call_cache[cache_key] = payload
-            return payload
-
-        except json.JSONDecodeError as e:
-            log.error(f"[groq] JSON inválido (intento {attempt}/{max_attempts}): {e}")
-            _bump_groq_metric("errors_total")
-            _set_groq_symbol_cooldown(symbol)
-            fallback = _build_groq_fallback_decision("Groq devolvió JSON inválido")
-            if cache_key:
-                groq_call_cache[cache_key] = fallback
-            return fallback
-
-        except Exception as e:
-            err_str = str(e)
-            status_code = getattr(e, "status_code", None)
-            if status_code == 429 or "429" in err_str or "rate_limit" in err_str.lower():
-                retry_after = _extract_retry_delay_seconds(err_str)
-                groq_key_cooldowns[client_idx] = time.time() + retry_after + 1.0
-                if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
-                    _bump_groq_metric("key_rotations_total")
-                    log.warning(
-                        f"[groq] Key #{client_idx+1} en cooldown {retry_after:.0f}s - probando siguiente key"
-                    )
-                    continue
-                groq_cooldown_until = time.time() + retry_after + 1.0
-                _set_groq_symbol_cooldown(
-                    symbol,
-                    seconds=max(
-                        int(math.ceil(retry_after)) + 1,
-                        int(getattr(cfg, "GROQ_SYMBOL_COOLDOWN_SEC", 0) or 0),
-                    ),
-                )
-                log.error(f"[groq] Cuota agotada - cooldown global {retry_after:.0f}s")
-                _bump_groq_metric("quota_hits_total")
-                fallback = _build_groq_fallback_decision(
-                    f"Cuota Groq agotada, reintentar tras {retry_after:.0f}s"
-                )
-                if cache_key:
-                    groq_call_cache[cache_key] = fallback
-                return fallback
-            if "503" in err_str or "UNAVAILABLE" in err_str:
-                if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
-                    _bump_groq_metric("key_rotations_total")
-                    log.warning(f"[groq] 503 UNAVAILABLE en key #{client_idx+1} - probando siguiente key")
-                    continue
-            elif "404" in err_str or "NOT_FOUND" in err_str:
-                log.error(f"[groq] Modelo no disponible: {e}")
-                _bump_groq_metric("errors_total")
-                fallback = _build_groq_fallback_decision("Modelo Groq no disponible")
-                _set_groq_symbol_cooldown(symbol)
-                if cache_key:
-                    groq_call_cache[cache_key] = fallback
-                return fallback
-            log.error(f"[groq] Error con key #{client_idx+1}: {e}")
-            if len(groq_clients) > 1 and len(tried_keys) < len(groq_clients):
-                _bump_groq_metric("key_rotations_total")
-                continue
-            if attempt == max_attempts:
-                _bump_groq_metric("errors_total")
-                fallback = _build_groq_fallback_decision("Error transitorio de Groq")
-                _set_groq_symbol_cooldown(symbol)
-                if cache_key:
-                    groq_call_cache[cache_key] = fallback
-                return fallback
-    fallback = _build_groq_fallback_decision("Groq sin respuesta")
-    _set_groq_symbol_cooldown(symbol)
+    payload = {
+        "decision": result["decision"],
+        "confidence": result["confidence"],
+        "reason": result.get("reason", ""),
+        "score": result.get("score", 0.0),
+        "key_signals": [],
+        "main_risk": "",
+    }
+    _set_last_decision_analysis(symbol, payload)
+    _bump_decision_metric("api_success_total")
     if cache_key:
-        groq_call_cache[cache_key] = fallback
-    return fallback
+        decision_call_cache[cache_key] = payload
+    return payload
 
 
 def build_context(
@@ -1403,7 +983,7 @@ def build_lateral_context(
         mem_check = payload["mem_check"]
         plan = payload["trade_plan"]
         lines += [
-            f"[{action}] listo_para_groq={payload['candidate_ok']}",
+            f"[{action}] listo_para_decision={payload['candidate_ok']}",
             f"  gate: {payload['candidate_reason'] or 'OK'}",
             f"  memory: block={mem_check.should_block} adj={mem_check.confidence_adj:+.1f} detail={mem_check.warning_msg}",
             f"  scorecard: block={scorecard.should_block} wr={scorecard.win_rate:.1f}% n={scorecard.sample_size} reason={scorecard.reason}",
@@ -2438,7 +2018,7 @@ def _process_symbol(
         candidate_payloads = {}
         ready_actions = []
         for action, features, mem_check, scorecard, policy in viable:
-            candidate_ok, candidate_reason, trade_plan = _is_groq_candidate_ready(
+            candidate_ok, candidate_reason, trade_plan = _is_decision_candidate_ready(
                 symbol, action, ind, sr_ctx, sym_cfg
             )
             candidate_payloads[action] = {
@@ -2454,7 +2034,7 @@ def _process_symbol(
                 ready_actions.append(action)
 
         if not ready_actions:
-            _bump_groq_metric("skipped_by_gate_total")
+            _bump_decision_metric("skipped_by_gate_total")
             reasons = " | ".join(
                 f"{action}:{payload['candidate_reason']}" for action, payload in candidate_payloads.items()
             )
@@ -2463,7 +2043,7 @@ def _process_symbol(
             log.info(f"[{symbol}] Lateral sin candidato listo — {reasons}")
             return
 
-        cache_key = _build_groq_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
+        cache_key = _build_decision_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
         # Store the first viable direction for the deterministic decision engine
         _symbol_state[symbol]["mem_direction"] = ready_actions[0]
         context = build_lateral_context(
@@ -2475,7 +2055,7 @@ def _process_symbol(
             cal_events=cal_events_nearby,
             candidate_payloads=candidate_payloads,
         )
-        decision = ask_groq(symbol, context, sym_cfg, cache_key=cache_key)
+        decision = ask_decision_engine(symbol, sym_cfg, cache_key=cache_key)
         base_payload = candidate_payloads[ready_actions[0]]
         _execute_decision(
             symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
@@ -2527,35 +2107,35 @@ def _process_symbol(
         log.info(f"[{symbol}] {msg} | {policy.reason}")
         return
 
-    # ── FASE 3: Confluence Gate pre-Groq (directional path) ──────
+    # ── FASE 3: Confluence Gate pre-decision (directional path) ──────
     if _apply_confluence_gate_pre(symbol, ind, mem_direction):
         return
 
-    candidate_ok, candidate_reason, trade_plan = _is_groq_candidate_ready(
+    candidate_ok, candidate_reason, trade_plan = _is_decision_candidate_ready(
         symbol, mem_direction, ind, sr_ctx, sym_cfg
     )
     if not candidate_ok:
-        _bump_groq_metric("skipped_by_gate_total")
+        _bump_decision_metric("skipped_by_gate_total")
         _set_symbol_status(symbol, candidate_reason[:48])
         last_action = f"{candidate_reason} {symbol}"
-        log.info(f"[{symbol}] {candidate_reason} — Groq no consultado")
+        log.info(f"[{symbol}] {candidate_reason} — decisión no procesada")
         return
 
-    cache_key = _build_groq_cache_key(symbol, mem_direction, candle_stamp, ind)
+    cache_key = _build_decision_cache_key(symbol, mem_direction, candle_stamp, ind)
     context  = build_context(
         symbol, ind, sr_ctx, news_ctx, mem_check, sym_cfg,
         cal_events_nearby, scorecard, policy, trade_plan,
     )
-    decision = ask_groq(symbol, context, sym_cfg, cache_key=cache_key)
+    decision = ask_decision_engine(symbol, sym_cfg, cache_key=cache_key)
     _execute_decision(symbol, sym_cfg, decision, ind, sr_ctx, news_ctx,
                       mem_check, features, balance, df_entry)
 
 
 def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
     """
-    FASE 3 — Confluence Hard Gate (pre-Groq).
+    FASE 3 — Confluence Hard Gate (pre-decisión).
 
-    Bloquea la llamada a Groq si la Confluencia de 3 Pilares contradice
+    Bloquea el procesamiento de decisión si la Confluencia de 3 Pilares contradice
     fuertemente la dirección esperada. Ahorra una llamada API y aplica el
     equivalente en código a REGLA 15 del system prompt.
 
@@ -2580,14 +2160,14 @@ def _apply_confluence_gate_pre(symbol: str, ind: dict, direction: str) -> bool:
         msg = f"⚡ Conf veta BUY ({conf_total:+.2f}) — pilares bajistas"
         _set_symbol_status(symbol, msg[:48])
         last_action = f"{msg} {symbol}"
-        log.info(f"[{symbol}] {msg} — Groq no consultado")
+        log.info(f"[{symbol}] {msg} — decisión no procesada")
         return True
 
     if direction == "SELL" and conf_total > hard_thresh:
         msg = f"⚡ Conf veta SELL ({conf_total:+.2f}) — pilares alcistas"
         _set_symbol_status(symbol, msg[:48])
         last_action = f"{msg} {symbol}"
-        log.info(f"[{symbol}] {msg} — Groq no consultado")
+        log.info(f"[{symbol}] {msg} — decisión no procesada")
         return True
 
     return False
@@ -2598,12 +2178,12 @@ def _execute_decision(
     mem_check, features, balance, df_entry,
     candidate_payloads=None,
 ):
-    """Valida la decisión de Groq y aplica filtro anti-contra-tendencia."""
+    """Valida la decisión del motor determinista y aplica filtros de seguridad."""
     global last_action
 
     if decision is None:
-        log.warning(f"[{symbol}] Groq no respondió")
-        _set_symbol_status(symbol, "🤖 Groq no respondió")
+        log.warning(f"[{symbol}] motor de decisión sin respuesta")
+        _set_symbol_status(symbol, "🤖 motor sin respuesta")
         return
 
     action     = decision.get("decision", "HOLD")
@@ -2690,22 +2270,22 @@ def _execute_decision(
         _set_symbol_status(symbol, f"🚫 {filter_reason[:48]}")
         return
 
-    # ── FASE 3: Confluence Hard Gate (safety net post-Groq) ─────
-    # Veta la orden si la respuesta de Groq contradice la confluencia global.
-    # Captura el caso LATERAL donde la dirección no se conocía antes de Groq.
+    # ── FASE 3: Confluence Hard Gate (safety net post-decisión) ─────
+    # Veta la orden si la decisión contradice la confluencia global.
+    # Captura el caso LATERAL donde la dirección no era definitiva pre-decision.
     conf_total  = ind.get("confluence", {}).get("total", 0.0)
     conf_thresh = (
         getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)
         * getattr(cfg, "CONFLUENCE_HARD_GATE_MULT", 2)
     )
     if action == "BUY" and conf_total < -conf_thresh:
-        msg = f"⚡ Conf veta BUY post-Groq ({conf_total:+.2f})"
+        msg = f"⚡ Conf veta BUY post-decisión ({conf_total:+.2f})"
         log.info(f"[{symbol}] {msg}")
         last_action = f"{msg} {symbol}"
         _set_symbol_status(symbol, msg[:48])
         return
     if action == "SELL" and conf_total > conf_thresh:
-        msg = f"⚡ Conf veta SELL post-Groq ({conf_total:+.2f})"
+        msg = f"⚡ Conf veta SELL post-decisión ({conf_total:+.2f})"
         log.info(f"[{symbol}] {msg}")
         last_action = f"{msg} {symbol}"
         _set_symbol_status(symbol, msg[:48])
