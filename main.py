@@ -592,6 +592,12 @@ _GET_CANDLES_RETRY_WAIT = 0.5
 # Da tiempo a MT5 para iniciar la descarga asíncrona de historial.
 _SYMBOL_WARMUP_WAIT_SEC = 2
 
+# ── Constantes de reconexión MT5 con backoff exponencial ──
+_RECONNECT_BASE_DELAY_SEC = 30
+_RECONNECT_MAX_EXPONENT = 4     # máx factor = 2^4 = 16 → 30*16 = 480s
+_RECONNECT_MAX_DELAY_SEC = 300  # tope absoluto 5 min
+_mt5_reconnect_fails = 0        # contador de fallos consecutivos (module-level)
+
 
 def conectar_mt5() -> bool:
     if not mt5.initialize():
@@ -1964,8 +1970,8 @@ def _process_symbol(
     # Store updated indicators (with hurst_penalty) for decision engine
     _symbol_state[symbol]["last_indicators"] = ind
     if hurst_val < min_hurst:
-        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
-        _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
+        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp — {hurst_reason}")
+        _set_symbol_status(symbol, f"📉 Hurst scalp OK {hurst_val:.2f}")
 
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
@@ -2522,9 +2528,18 @@ def run():
 
             balance, equity = get_account_info()
             if balance is None:
+                global _mt5_reconnect_fails
                 log.warning("[main] Sin balance — reconectando...")
                 if not conectar_mt5():
-                    time.sleep(30); continue
+                    _mt5_reconnect_fails += 1
+                    wait = min(
+                        _RECONNECT_BASE_DELAY_SEC * (2 ** min(_mt5_reconnect_fails - 1, _RECONNECT_MAX_EXPONENT)),
+                        _RECONNECT_MAX_DELAY_SEC,
+                    )
+                    log.warning(f"[main] Reconexión fallida #{_mt5_reconnect_fails}, espera {wait}s")
+                    time.sleep(wait)
+                    continue
+                _mt5_reconnect_fails = 0
 
             maybe_send_daily_summary(balance, equity)
             maybe_send_eod_analysis(balance, equity)

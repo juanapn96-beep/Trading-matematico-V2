@@ -125,7 +125,7 @@ def notify_bot_started(balance: float, equity: float, memory_stats: dict, symbol
         "             Confluencia 3 Pilares ponderada 40/30/30",
         "  ✅ FASE 2 — Neural Brain v3 (40 features, Kelly Position Sizing)",
         "             MLP + Cosine Memory + Attention (ensemble automático)",
-        "  ✅ FASE 3 — Confluence Hard Gate (pre+post Gemini)",
+        "  ✅ FASE 3 — Confluence Hard Gate (pre+post Decisión)",
         "             Dashboard v2 (fila microestructura) + Notifs. ricas",
         "  ✅ FASE 4 — Policy Engine (ranking WR/PF/Reward/Sample)",
         "  ✅ FASE 5 — Equity Guard (bloqueo de nuevas entradas por drawdown)",

@@ -1,6 +1,6 @@
 """
 ZAR v7 — Decision Engine Determinista
-Reemplaza ask_groq() con reglas binarias repetibles.
+Motor de decisión basado en reglas binarias repetibles (sin LLM).
 """
 import logging
 from modules.sentiment_data import get_sentiment_for_symbol
@@ -17,7 +17,7 @@ def deterministic_decision(
     sym_cfg: dict,
 ) -> dict:
     """
-    Motor de decisión determinista que reemplaza a Groq.
+    Motor de decisión determinista (sin LLM).
 
     Returns:
         {"decision": "BUY"|"SELL"|"HOLD", "confidence": int, "reason": str, "score": float}
@@ -95,6 +95,35 @@ def deterministic_decision(
     elif direction == "SELL" and "BEAR" in str(rsi_div).upper():
         score += 0.5
         reasons.append("RSI_div=BEAR✓")
+
+    # ═══ PILAR 2b: FISHER TRANSFORM + CONFLUENCIA (max +1.5) ═══
+    fisher_val = indicators.get("fisher", 0.0)
+    fisher_cross = indicators.get("fisher_cross", "NONE")
+    if direction == "BUY" and fisher_val < -1.5:
+        score += 0.75
+        reasons.append(f"Fisher={fisher_val:.1f}(extremo_bajo✓)")
+    elif direction == "SELL" and fisher_val > 1.5:
+        score += 0.75
+        reasons.append(f"Fisher={fisher_val:.1f}(extremo_alto✓)")
+    elif direction == "BUY" and fisher_cross == "BULL_CROSS":
+        score += 0.5
+        reasons.append("Fisher=BULL_CROSS✓")
+    elif direction == "SELL" and fisher_cross == "BEAR_CROSS":
+        score += 0.5
+        reasons.append("Fisher=BEAR_CROSS✓")
+
+    # Confluencia 3 pilares (microestructura + estadístico + gráfico)
+    confluence = indicators.get("confluence", {})
+    conf_total = confluence.get("total", 0.0) if isinstance(confluence, dict) else 0.0
+    if direction == "BUY" and conf_total > 0.5:
+        score += 0.75
+        reasons.append(f"conf={conf_total:+.2f}✓")
+    elif direction == "SELL" and conf_total < -0.5:
+        score += 0.75
+        reasons.append(f"conf={conf_total:+.2f}✓")
+    elif (direction == "BUY" and conf_total < -0.3) or (direction == "SELL" and conf_total > 0.3):
+        score -= 0.5
+        reasons.append(f"conf={conf_total:+.2f}✗")
 
     # ═══ PILAR 3: ZONAS S/R (max +2.0) ═══
     in_strong_zone = sr_context.get("in_strong_zone", False) if isinstance(sr_context, dict) else False
