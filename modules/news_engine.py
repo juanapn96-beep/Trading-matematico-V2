@@ -3,7 +3,7 @@
 ║   ZAR ULTIMATE BOT v6 — news_engine.py  (v3 — DIRECTIONAL)            ║
 ║                                                                          ║
 ║   FILOSOFÍA v3:                                                          ║
-║   Las noticias son CONTEXTO para Gemini, NO un filtro de trading.      ║
+║   Las noticias son CONTEXTO para la decisión, NO un filtro de trading.  ║
 ║   Solo breaking news inesperadas bloquean (el calendario ya maneja     ║
 ║   los eventos programados con precisión de 1 minuto).                  ║
 ║                                                                          ║
@@ -11,7 +11,7 @@
 ║   "Fed hawkish"  → USD_sentiment = +0.80  (USD sube)                  ║
 ║   "BOJ dovish"   → JPY_sentiment = -0.75  (JPY baja)                  ║
 ║   "ECB rate cut" → EUR_sentiment = -0.80  (EUR baja)                  ║
-║   Resultado llega a Gemini como contexto rico para su decisión.        ║
+║   Resultado llega al motor de decisión como contexto rico.              ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 

@@ -370,7 +370,7 @@ def build_sr_context(
 
 
 def sr_for_prompt(ctx: SRContext) -> str:
-    """Formatea el contexto S/R para el prompt de Gemini."""
+    """Formatea el contexto S/R para el motor de decisión."""
     lines = [ctx.summary, ""]
 
     if ctx.fib_levels:

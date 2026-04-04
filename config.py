@@ -101,7 +101,8 @@ _NO_SUFFIX = {"USTEC", "DE40", "US30"}
 # ================================================================
 #  MOTOR DE DECISIÓN DETERMINISTA (sin LLM)
 # ================================================================
-DECISION_SYMBOL_COOLDOWN_SEC = int(os.environ.get("DECISION_SYMBOL_COOLDOWN_SEC", "120") or 120)
+# FIX: 120→45s — cooldown de decisión más agresivo para scalping M1 sniper.
+DECISION_SYMBOL_COOLDOWN_SEC = int(os.environ.get("DECISION_SYMBOL_COOLDOWN_SEC", "45") or 45)
 DECISION_MIN_ENTRY_QUALITY   = int(os.environ.get("DECISION_MIN_ENTRY_QUALITY", "3") or 3)
 DECISION_ENTRY_STRONG_ONLY   = _env_flag("DECISION_ENTRY_STRONG_ONLY", True)
 DECISION_ENTRY_CONF_MULT     = float(os.environ.get("DECISION_ENTRY_CONF_MULT", "2.0") or 2.0)
@@ -109,7 +110,8 @@ ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
 # Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido).
 SCALPING_ONLY            = _env_flag("SCALPING_ONLY", True)
 SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
-SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
+# FIX: 0.18→0.25 — Hurst < 0.25 es prácticamente random walk; no operar.
+SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.25") or 0.25)
 SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
 # FIX v7.0: 0.82→0.98 — SELL con TP_MULT=0.82 destruía el R:R en casi todos los SELL.
 # Ejemplo con EURUSD SELL (sl=1.5×ATR, tp_sell=3.0×ATR):
@@ -129,7 +131,9 @@ SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.
 # Ganancia mínima esperada en USD para abrir una operación.
 # Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
 # Esto evita trades de $0.50 que no justifican el riesgo ni el spread.
-MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "5.0") or 5.0)
+# FIX: 5.0→2.0 — umbral más bajo para capturar más oportunidades sniper rápidas.
+# Con $2 el lot×TP sigue justificando el riesgo en cuentas desde $500.
+MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "2.0") or 2.0)
 # ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
 # Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
 # para calcular SL y TP. Esto hace que los stops sean proporcionales al
@@ -195,7 +199,7 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
-        "min_decision_score": 5.5,
+        "min_decision_score": 4.5,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.40,
         "sr_lookback":    100,
@@ -235,10 +239,9 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
-        "min_decision_score": 5.0,
+        "min_decision_score": 4.0,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.10,
-        "sr_lookback":    100,
         "sr_timeframes":  ["M5", "M15", "H1"],
         "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
         "atr_norm_factor":  0.0015,
@@ -274,7 +277,7 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
-        "min_decision_score": 5.0,
+        "min_decision_score": 4.0,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.12,
         "sr_lookback":    100,
@@ -314,7 +317,7 @@ SYMBOLS = {
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
-        "min_decision_score": 5.5,
+        "min_decision_score": 4.5,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.25,
         "sr_lookback":    100,
@@ -354,7 +357,7 @@ SYMBOLS = {
         "rsi_oversold":   28,
         "rsi_overbought": 72,
         "min_confidence": 7,
-        "min_decision_score": 6.0,
+        "min_decision_score": 5.0,
         "min_hurst":      0.40,
         "sr_tolerance_pct": 0.50,
         "sr_lookback":    100,
@@ -385,8 +388,8 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
-# FIX v7.0: Cooldown reducido de 180s a 60s para scalping M1 activo
-SYMBOL_COOLDOWN_SEC = 60
+# FIX v7.0: Cooldown reducido de 180s a 30s para scalping M1 sniper agresivo
+SYMBOL_COOLDOWN_SEC = int(os.environ.get("SYMBOL_COOLDOWN_SEC", "30") or 30)
 
 # Cooldown específico para avisos de "bloqueo por memoria" en Telegram.
 # Evita repetir el mismo warning una y otra vez cuando el símbolo sigue
@@ -416,8 +419,8 @@ WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "50")))
 WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "0.5"))
 
 # Tiempo de espera entre iteraciones del ciclo principal (segundos)
-# FIX v7.0: Loop reducido de 30s a 10s para respuesta más rápida en scalping M1
-LOOP_SLEEP_SEC      = 10
+# FIX: 10→5s — ciclo más rápido para entradas sniper M1
+LOOP_SLEEP_SEC      = int(os.environ.get("LOOP_SLEEP_SEC", "5") or 5)
 
 MAX_DAILY_LOSS      = 0.05   # 5% pérdida máxima diaria
 

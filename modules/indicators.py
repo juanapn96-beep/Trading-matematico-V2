@@ -18,7 +18,7 @@
 ║                                                                  ║
 ║   FIX v6.2 — h1_trend:                                         ║
 ║   Antes: ALCISTA_FUERTE requería Hurst > 0.55 → con Hurst      ║
-║   0.40-0.55 todo caía en LATERAL y Gemini nunca operaba.       ║
+║   0.40-0.55 todo caía en LATERAL y el bot nunca operaba.       ║
 ║   Ahora: 5 niveles de tendencia según Hurst + Kalman:          ║
 ║   ALCISTA_FUERTE / ALCISTA / LATERAL_ALCISTA /                 ║
 ║   LATERAL / LATERAL_BAJISTA / BAJISTA / BAJISTA_FUERTE         ║
@@ -961,10 +961,10 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         #
         #  BUG ORIGINAL: requería Hurst > 0.55 para ALCISTA/BAJISTA
         #  → Con Hurst 0.40-0.55 (sesión asiática normal) todo caía
-        #    en LATERAL y Gemini nunca operaba.
+        #    en LATERAL y el bot nunca operaba.
         #
         #  SOLUCIÓN: 7 niveles de tendencia que cubren todos los
-        #  regímenes de Hurst. Gemini recibe contexto completo y
+        #  regímenes de Hurst. El motor recibe contexto completo y
         #  puede decidir BUY/SELL incluso con Hurst moderado.
         #
         #  NIVELES:
@@ -1019,7 +1019,7 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         else:
             ctx["h1_trend"] = "LATERAL"
 
-        # Guardar votos para el prompt de Gemini (transparencia)
+        # Guardar votos para el motor de decisión (transparencia)
         ctx["trend_votes"] = {"bull": bullish_votes, "bear": bearish_votes}
 
         micro_price_now = float(micro_df["close"].iloc[-1]) if len(micro_df) > 0 else float(price_now)

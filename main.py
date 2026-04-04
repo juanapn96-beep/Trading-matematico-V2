@@ -1964,8 +1964,8 @@ def _process_symbol(
     # Store updated indicators (with hurst_penalty) for decision engine
     _symbol_state[symbol]["last_indicators"] = ind
     if hurst_val < min_hurst:
-        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
-        _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
+        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp — {hurst_reason}")
+        _set_symbol_status(symbol, f"📉 Hurst scalp OK {hurst_val:.2f}")
 
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
@@ -2524,7 +2524,13 @@ def run():
             if balance is None:
                 log.warning("[main] Sin balance — reconectando...")
                 if not conectar_mt5():
-                    time.sleep(30); continue
+                    _mt5_reconnect_fails = getattr(run, '_mt5_reconnect_fails', 0) + 1
+                    run._mt5_reconnect_fails = _mt5_reconnect_fails
+                    wait = min(30 * (2 ** min(_mt5_reconnect_fails - 1, 4)), 300)
+                    log.warning(f"[main] Reconexión fallida #{_mt5_reconnect_fails}, espera {wait}s")
+                    time.sleep(wait)
+                    continue
+                run._mt5_reconnect_fails = 0
 
             maybe_send_daily_summary(balance, equity)
             maybe_send_eod_analysis(balance, equity)

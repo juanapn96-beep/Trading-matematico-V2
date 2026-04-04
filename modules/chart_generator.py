@@ -536,11 +536,11 @@ def _build_chart(
     )
     fig.suptitle(main_title, color=COLORS["text"], fontsize=10, fontweight="bold", y=0.97)
 
-    # ── Info box con razón de Gemini ──
+    # ── Info box con razón de decisión ──
     reason_short = (reason[:180] + "...") if len(reason) > 180 else reason
     fig.text(
         0.07, 0.015,
-        f"📊 Gemini: {reason_short}",
+        f"📊 Decisión: {reason_short}",
         color=COLORS["text_dim"], fontsize=7,
         wrap=True, va="bottom",
         bbox=dict(

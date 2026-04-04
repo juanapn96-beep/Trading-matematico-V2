@@ -9,7 +9,7 @@
 ║   1. MT5 en vivo — mt5.copy_rates_range() (broker Exness)       ║
 ║   2. CSV offline — columnas time,open,high,low,close,volume     ║
 ║                                                                  ║
-║   Señales evaluadas (sin Groq/LLM):                             ║
+║   Señales evaluadas (motor determinista):                        ║
 ║   • confluence["total"] > CONFLUENCE_MIN_SCORE                  ║
 ║   • Hurst >= sym_cfg["min_hurst"]                               ║
 ║   • ATR tradeable (is_market_tradeable check)                   ║
