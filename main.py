@@ -1612,9 +1612,12 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     tp        = float(pos.get("tp", 0.0) or 0.0)
 
     # Obtener ATR del cache de indicadores
+    # FASE-C: preferir atr_entry (M1) en scalp mode, fallback a atr (M15)
     ind     = ind_cache.get(symbol, {})
-    atr_val = ind.get("atr", 0)
+    atr_val = float(ind.get("atr_entry", ind.get("atr", 0)) or 0)
 
+    if atr_val <= 0:
+        atr_val = float(ind.get("atr", 0) or 0)
     if atr_val <= 0:
         return  # Sin ATR disponible, no actuar
 
@@ -1672,11 +1675,13 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
 
     if scalp_mode:
         # gained_pips ya está calculado en el gate anterior
+        # FASE-C: Stage 5 añadido para protección final cerca del TP
         stage_definitions = [
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3, "Scalp lock 30%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2, "Scalp lock 15%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_5", 25.0)), 0.85, 6, "Scalp lock 85%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")),       0.70, 5, "Scalp lock 70%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")),       0.50, 4, "Scalp lock 50%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")),       0.30, 3, "Scalp lock 30%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")),       0.15, 2, "Scalp lock 15%"),
         ]
         lock_pct = 0.0
         new_stage = 1

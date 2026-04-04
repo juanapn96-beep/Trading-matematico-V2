@@ -98,6 +98,36 @@ Hilbert ni Fisher confirmaran el punto de reversión.
 
 ---
 
+## [2026-04-04] - FASE C: Trailing Stop Optimización para Scalping M1
+
+### ANÁLISIS DE TRAILING STOP
+
+El trailing en scalp mode era pip-based y correcto tras FASE A. Sin embargo:
+1. El ATR usado como fallback (`ind.get("atr")`) era el ATR del TF de tendencia (M15),
+   no el ATR de entrada (M1). En scalp mode la referencia es M1.
+2. Solo existían 4 stages de protección (5/8/12/18 pips → 15/30/50/70%).
+   Después de 18 pips ganados, no había protección adicional hasta el TP.
+   Un trade que llegaba a 25 pips podía perder de vuelta al nivel del Stage 4 (12.6 pips).
+
+### main.py
+- **`_manage_trailing_stop()`** — ATR source: `atr_val` ahora usa `atr_entry` (ATR M1)
+  con fallback a `atr` (ATR M15) cuando `atr_entry` no está disponible. El ATR M1 es
+  el de referencia para scalping y el correcto para el buffer de protección BE.
+- **`_manage_trailing_stop()`** — Stage 5 añadido: `gained_pips >= SCALPING_BE_PIPS_STAGE_5`
+  (25 pips) → lock 85% del profit acumulado. Previene perder >15% del camino ganado
+  cuando el trade ya está muy cerca del TP. Stage_num=6 (supera al Stage 4 con num=5).
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- **`SCALPING_BE_PIPS_STAGE_5 = 25.0`** *(nuevo)*: umbral para Stage 5 (25 pips → lock 85%).
+  Configurable vía `.env`: `SCALPING_BE_PIPS_STAGE_5=25.0`.
+  Ejemplo EURUSD (TP≈24 pips): Stage 5 a 25 pips ≈ 104% de TP → lock 85% (casi nunca activo,
+  solo si el precio supera el TP durante un spike).
+  Ejemplo BTCUSD (TP≈120 pips): Stage 5 a 25 pips = 21% del TP → protección temprana.
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
 
 ### modules/data_providers.py *(nuevo)*

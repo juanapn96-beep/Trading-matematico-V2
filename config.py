@@ -141,6 +141,10 @@ SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1",  "5.
 SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2",  "8.0") or  8.0)
 SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "12.0") or 12.0)
 SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "18.0") or 18.0)
+# FASE-C: Stage 5 — protección final cerca del TP (25+ pips → lock 85%).
+# Previene perder >85% del profit ganado cuando el trade ya está muy cerca del TP.
+# Ejemplo EURUSD (TP=24 pips): Stage 5 a 25 pips → cerca de TP, lock 85% del camino.
+SCALPING_BE_PIPS_STAGE_5 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_5", "25.0") or 25.0)
 SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.0") or  5.0)
 # Ganancia mínima esperada en USD para abrir una operación.
 # Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
