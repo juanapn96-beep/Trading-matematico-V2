@@ -21,23 +21,31 @@ log = logging.getLogger(__name__)
 
 HTTP_TIMEOUT = 15
 
+
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in cfg._NO_SUFFIX:
+        return base
+    return f"{base}{cfg.BROKER_SUFFIX}"
+
+
 # ════════════════════════════════════════════════════════════════
 #  MAPA SÍMBOLO → DIVISAS AFECTADAS POR EL CALENDARIO
 # ════════════════════════════════════════════════════════════════
 
 SYMBOL_CURRENCIES: Dict[str, List[str]] = {
-    "XAUUSDm":  ["USD"],
-    "US500m":   ["USD"],
-    "EURUSDm":  ["EUR", "USD"],
-    "GBPUSDm":  ["GBP", "USD"],
-    "USDJPYm":  ["USD", "JPY"],
-    "GBPJPYm":  ["GBP", "JPY"],
-    "XAGUSDm":  ["USD"],
-    "USOILm":   ["USD"],
-    "USTEC":    ["USD"],
-    "DE40":     ["EUR"],
-    "EURJPYm":  ["EUR", "JPY"],
-    "BTCUSDm":  ["USD"],
+    _sym("XAUUSD"):  ["USD"],
+    _sym("US500"):   ["USD"],
+    _sym("EURUSD"):  ["EUR", "USD"],
+    _sym("GBPUSD"):  ["GBP", "USD"],
+    _sym("USDJPY"):  ["USD", "JPY"],
+    _sym("GBPJPY"):  ["GBP", "JPY"],
+    _sym("XAGUSD"):  ["USD"],
+    _sym("USOIL"):   ["USD"],
+    _sym("USTEC"):   ["USD"],
+    _sym("DE40"):    ["EUR"],
+    _sym("EURJPY"):  ["EUR", "JPY"],
+    _sym("BTCUSD"):  ["USD"],
 }
 
 FF_URLS = [
