@@ -201,6 +201,10 @@ H1_CACHE_TTL_SEC = 300    # 5 minutos — refreshed even within same candle for 
 _h1_bias_cache: dict = {}  # {symbol: {"bias": "ALCISTA"|"BAJISTA"|"LATERAL", "ts": float}}
 H1_BIAS_CACHE_TTL_SEC = 600  # 10 min — H1 velas cambian lentamente
 
+# Buffer para cruce DEMA H1 — 0.005% (= 0.00005) para evitar ruido cuando
+# DEMA fast ≈ DEMA slow. Por debajo de este umbral la diferencia < 1 spread típico.
+_H1_BIAS_CROSSOVER_TOL = 0.00005
+
 
 def _get_h1_bias(symbol: str) -> str:
     """
@@ -223,9 +227,9 @@ def _get_h1_bias(symbol: str) -> str:
     ema55 = close.ewm(span=55, adjust=False).mean()
     dema_slow = (2 * ema55 - ema55.ewm(span=55, adjust=False).mean()).iloc[-1]
 
-    if dema_fast > dema_slow * 1.00005:
+    if dema_fast > dema_slow * (1 + _H1_BIAS_CROSSOVER_TOL):
         bias = "ALCISTA"
-    elif dema_fast < dema_slow * 0.99995:
+    elif dema_fast < dema_slow * (1 - _H1_BIAS_CROSSOVER_TOL):
         bias = "BAJISTA"
     else:
         bias = "LATERAL"
@@ -1710,13 +1714,16 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
 
     if scalp_mode:
         # gained_pips ya está calculado en el gate anterior
-        # FASE-C: Stage 5 añadido para protección final cerca del TP
+        # FASE-C: Stage 5 añadido para protección final cerca del TP.
+        # stage_num es el nivel de protección interno (ratchet). Los stages van del 2
+        # (primer BE) al 6 (Stage 5 — máximo lock 85%). No puede bajar una vez activado.
+        # La numeración interna es: Stage1=num2, Stage2=num3, Stage3=num4, Stage4=num5, Stage5=num6.
         stage_definitions = [
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_5", 25.0)), 0.85, 6, "Scalp lock 85%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")),       0.70, 5, "Scalp lock 70%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")),       0.50, 4, "Scalp lock 50%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")),       0.30, 3, "Scalp lock 30%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")),       0.15, 2, "Scalp lock 15%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_5", 25.0)), 0.85, 6, "Scalp lock 85%"),  # Stage 5
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")),       0.70, 5, "Scalp lock 70%"),  # Stage 4
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")),       0.50, 4, "Scalp lock 50%"),  # Stage 3
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")),       0.30, 3, "Scalp lock 30%"),  # Stage 2
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")),       0.15, 2, "Scalp lock 15%"),  # Stage 1
         ]
         lock_pct = 0.0
         new_stage = 1

@@ -117,7 +117,7 @@ GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120")
 GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
 GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
 # FASE-B: GROQ_ENTRY_CONF_MULT 1.8 → 2.0 para threshold premium sniper.
-# Con CONFLUENCE_MIN_SCORE=0.50: premium = 0.50 × 2.0 = 1.00 — señal fuerte.
+# Con CONFLUENCE_MIN_SCORE=0.50: premium = 0.50 * 2.0 = 1.00 — señal fuerte.
 GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "2.0") or 2.0)
 GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
 ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
