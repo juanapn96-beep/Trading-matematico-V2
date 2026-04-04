@@ -57,6 +57,47 @@ que silenciosamente anulaban los fixes documentados en v7.0:
 
 ---
 
+## [2026-04-04] - FASE B: Mejoras de Calidad de Entrada — Sniper Scalping
+
+### ANÁLISIS DE CALIDAD DE ENTRADA (estado previo a esta fase)
+
+Con `CONFLUENCE_MIN_SCORE = 0.25` en una escala [-3, +3], el gate de entrada permitía
+señales con alineación mínima de pilares (P1=+0.3, P2=0, P3=0 → total=0.30 → pasa).
+Esto no es "sniper". Para scalping de alta precisión necesitamos señales donde al menos
+2 pilares estén moderadamente alineados. El umbral correcto para "sniper" es 0.50.
+
+Además, las estrategias de ciclo (VOLATILITY_CYCLE, CYCLE_REVERSION, CRYPTO_WAVE) no
+requerían confirmación de ciclo activo — se podía entrar en mitad de ciclo sin que
+Hilbert ni Fisher confirmaran el punto de reversión.
+
+### config.py
+- **`CONFLUENCE_MIN_SCORE`**: `0.25 → 0.50` — umbral moderado sniper. Ahora requiere
+  inclinación significativa de los 3 pilares para pasar el gate de entrada. El umbral
+  premium con `GROQ_ENTRY_CONF_MULT=2.0` queda en `0.50 × 2.0 = 1.00` (señal fuerte).
+- **`GROQ_ENTRY_CONF_MULT`**: `1.8 → 2.0` — eleva el threshold "premium" de confluencia
+  a ±1.0, un tercio de la escala máxima. Solo señales con 2+ pilares claramente alineados
+  pasan como "confluencia premium".
+- **`min_decision_score` por símbolo** *(nuevo campo)*: configurado por símbolo en `SYMBOLS`
+  para ajustar la exigencia del motor determinístico según la volatilidad del activo:
+  - XAUUSD: `5.5` (volátil, requiere confirmación más sólida)
+  - EURUSD: `5.0` (ciclos claros, estándar)
+  - GBPUSD: `5.0` (momentum exige confirmación)
+  - US500: `5.5` (requiere momentum claro antes de entrar)
+  - BTCUSD: `6.0` (el más volátil — señal más fuerte obligatoria)
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`_evaluate_strategy_specific_gate()`** — VOLATILITY_CYCLE / CYCLE_REVERSION / CRYPTO_WAVE:
+  Añadido gate sniper de ciclo. Para BUY, se requiere al menos una de:
+  `Hilbert == LOCAL_MIN` OR `Fisher < -2.0` OR `in_strong_zone`. Para SELL: `LOCAL_MAX`
+  OR `Fisher > 2.0` OR zona fuerte. Sin confirmación de ciclo/zona → rechazado.
+  Esto garantiza entradas en puntos de alta probabilidad de reversión (extremos de ciclo).
+- **`_evaluate_strategy_specific_gate()`** — MOMENTUM strategies: actualizado umbral
+  de confluencia a `CONFLUENCE_MIN_SCORE × 1.2 = 0.60` (coherente con nuevo valor 0.50).
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
 
 ### modules/data_providers.py *(nuevo)*

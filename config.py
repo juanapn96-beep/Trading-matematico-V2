@@ -116,7 +116,9 @@ GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 
 GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120") or 120)
 GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
 GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
-GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "1.8") or 1.8)
+# FASE-B: GROQ_ENTRY_CONF_MULT 1.8 → 2.0 para threshold premium sniper.
+# Con CONFLUENCE_MIN_SCORE=0.50: premium = 0.50 × 2.0 = 1.00 — señal fuerte.
+GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "2.0") or 2.0)
 GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
 ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
 # Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido)
@@ -221,6 +223,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      30,
+        "min_decision_score":     5.5,   # FASE-B sniper: XAUUSD exige score alto (volátil)
     },
 
     # ── 2. EUR/USD — 24/5, par más líquido del mundo ─────────────
@@ -260,9 +263,8 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      25,
+        "min_decision_score":     5.0,   # FASE-B sniper: EURUSD ciclos claros
     },
-
-    # ── 3. GBP/USD — 24/5, alta volatilidad para scalping ────────
     _sym("GBPUSD"): {
         "name":           "Libra / Dólar (Cable)",
         "currencies":     ["GBP", "USD"],
@@ -298,9 +300,8 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      25,
+        "min_decision_score":     5.0,   # FASE-B sniper: GBPUSD momentum exige confirmación
     },
-
-    # ── 4. S&P 500 — sesión americana, alta volatilidad ──────────
     _sym("US500"): {
         "name":           "S&P 500",
         "currencies":     ["USD"],
@@ -337,6 +338,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.86,
         "memory_warn_threshold":  0.76,
         "memory_decay_days":      25,
+        "min_decision_score":     5.5,   # FASE-B sniper: US500 requiere momentum claro
     },
 
     # ── 5. BITCOIN — 24/7, alta volatilidad ─────────────────────
@@ -376,6 +378,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.85,
         "memory_warn_threshold":  0.75,
         "memory_decay_days":      20,
+        "min_decision_score":     6.0,   # FASE-B sniper: BTCUSD más volátil, exige señal más fuerte
     },
 }
 
@@ -495,10 +498,15 @@ MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
 
 # Confluence Matrix: umbrales para el score ponderado de 3 pilares
 # [-3, +3] — mayor número = requisito más estricto para operar
-CONFLUENCE_MIN_SCORE         = 0.25  # Score mínimo absoluto para permitir entrada
-# (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
+# FASE-B: subido de 0.25 → 0.50 para entradas sniper.
+# En escala [-3,+3], 0.25 = cualquier inclinación mínima (demasiado permisivo).
+# 0.50 = inclinación moderada — requiere al menos 1 pilar firmemente alineado
+#       más otro ligeramente alineado, o 1 pilar muy fuertemente alineado.
+# Umbral premium para GROQ_ENTRY_CONF_MULT=2.0: 0.50 × 2.0 = 1.00 (señal sniper).
+CONFLUENCE_MIN_SCORE         = 0.50  # Score mínimo absoluto para permitir entrada
+# (0.0 = sin filtro, 0.50 = moderado sniper, 1.0 = estricto sniper puro)
 # Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
-# → el símbolo muestra "confluencia débil" pero aún se pregunta a Groq.
+# → el símbolo muestra "confluencia débil" y se descarta sin consultar Groq.
 
 # ================================================================
 #  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING

@@ -610,6 +610,10 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
     ])
 
     if strategy_type in {"VOLATILITY_CYCLE", "CYCLE_REVERSION", "GOLD_BETA_REVERSION", "CRYPTO_WAVE"}:
+        # FASE-B sniper: estas estrategias se basan en reversiones de ciclo.
+        # El ideal de entrada es Hilbert en extremo (LOCAL_MIN para BUY, LOCAL_MAX para SELL)
+        # o Fisher extremo con S/R fuerte. Sin confirmación de ciclo ni zona, la entrada
+        # no es sniper — se requiere al menos una condición de confirmación de ciclo.
         if action == "BUY":
             if hilbert_signal == "LOCAL_MAX":
                 return False, f"{strategy_type}: Hilbert en techo"
@@ -617,6 +621,14 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
                 return False, f"{strategy_type}: RSI demasiado alto sin S/R fuerte"
             if fisher > 2.5 and not in_strong_zone:
                 return False, f"{strategy_type}: Fisher extremo contrario"
+            # FASE-B: gate sniper de ciclo — al menos una condición de ciclo/zona activa
+            cycle_buy_ok = (
+                hilbert_signal == "LOCAL_MIN"
+                or (fisher < -2.0)
+                or in_strong_zone
+            )
+            if not cycle_buy_ok:
+                return False, f"{strategy_type}: sin confirmación de ciclo para BUY sniper (Hilbert={hilbert_signal}, Fisher={fisher:.1f})"
         else:
             if hilbert_signal == "LOCAL_MIN":
                 return False, f"{strategy_type}: Hilbert en suelo"
@@ -624,13 +636,21 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
                 return False, f"{strategy_type}: RSI demasiado bajo sin S/R fuerte"
             if fisher < -2.5 and not in_strong_zone:
                 return False, f"{strategy_type}: Fisher extremo contrario"
+            # FASE-B: gate sniper de ciclo — al menos una condición de ciclo/zona activa
+            cycle_sell_ok = (
+                hilbert_signal == "LOCAL_MAX"
+                or (fisher > 2.0)
+                or in_strong_zone
+            )
+            if not cycle_sell_ok:
+                return False, f"{strategy_type}: sin confirmación de ciclo para SELL sniper (Hilbert={hilbert_signal}, Fisher={fisher:.1f})"
         return True, ""
 
     if strategy_type in {"MOMENTUM_TREND", "MOMENTUM_SURGE", "TECH_MOMENTUM", "FRANKFURT_BREAKOUT", "RANGE_BREAKOUT_OIL"}:
         primaries = bullish_primaries if action == "BUY" else bearish_primaries
         if primaries < 3:
             return False, f"{strategy_type}: primarios alineados insuficientes ({primaries}/4)"
-        if abs(conf_total) < float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)) * 1.2:
+        if abs(conf_total) < float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.5)) * 1.2:
             return False, f"{strategy_type}: confluencia insuficiente ({conf_total:+.2f})"
         return True, ""
 
