@@ -124,9 +124,12 @@ SCALPING_ONLY            = _env_flag("SCALPING_ONLY", True)
 SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
 SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
 SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
-# FIX v7.0: 0.82→0.98 — SELL con TP_MULT=0.82 destruía el R:R en casi todos los SELL
-# (ej. EURUSD SELL: R:R base=1.20 → tras mult=0.984 < 1.50 → bloqueado).
-# Con 0.98 el TP se reduce apenas 2%, preservando el R:R para ambas direcciones.
+# FIX v7.0: 0.82→0.98 — SELL con TP_MULT=0.82 destruía el R:R en casi todos los SELL.
+# Ejemplo con EURUSD SELL (sl=1.5×ATR, tp_sell=3.0×ATR):
+#   R:R base = 3.0/1.5 = 2.00 → tras mult 0.82: 2.00×0.82=1.64 (pasa)
+#   Pero con el antiguo tp_atr_mult_sell=1.8 y ENTRY_MIN_RR=1.20:
+#   R:R base = 1.8/1.5 = 1.20 → tras mult 0.82: 1.20×0.82=0.984 < 1.20 → BLOQUEADO
+# Con 0.98 y TP simétrico el R:R efectivo es 1.96, superando holgadamente el mín 1.50.
 SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.98") or 0.98)
 # FIX v7.0: etapas de trail escaladas — 2→5 pips mínimos antes de mover SL.
 # Evita que el trail se active en ruido de mercado (spread + 1 pip) y cierre
