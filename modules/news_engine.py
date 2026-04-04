@@ -144,13 +144,20 @@ DIRECTIONAL_MAP = [
      "impact": {"BTC": +0.50}},
 ]
 
+def _sym(base: str) -> str:
+    """Retorna el nombre completo del símbolo según el broker configurado."""
+    if base in cfg._NO_SUFFIX:
+        return base
+    return f"{base}{cfg.BROKER_SUFFIX}"
+
+
 SYMBOL_TO_CURRENCIES = {
-    "XAUUSDm": ["XAU","USD"], "US500m":  ["USD"],
-    "EURUSDm": ["EUR","USD"], "GBPUSDm": ["GBP","USD"],
-    "USDJPYm": ["USD","JPY"], "GBPJPYm": ["GBP","JPY"],
-    "XAGUSDm": ["XAG","USD"], "USOILm":  ["OIL","USD"],
-    "USTEC":   ["USD"],        "DE40":    ["EUR"],
-    "EURJPYm": ["EUR","JPY"],  "BTCUSDm": ["BTC","USD"],
+    _sym("XAUUSD"): ["XAU","USD"], _sym("US500"):  ["USD"],
+    _sym("EURUSD"): ["EUR","USD"], _sym("GBPUSD"): ["GBP","USD"],
+    _sym("USDJPY"): ["USD","JPY"], _sym("GBPJPY"): ["GBP","JPY"],
+    _sym("XAGUSD"): ["XAG","USD"], _sym("USOIL"):  ["OIL","USD"],
+    "USTEC":        ["USD"],        "DE40":         ["EUR"],
+    _sym("EURJPY"): ["EUR","JPY"], _sym("BTCUSD"):  ["BTC","USD"],
 }
 
 BREAKING_PAUSE_KEYWORDS = [

@@ -36,12 +36,14 @@ except ImportError:
 
 try:
     from groq import Groq
+    _GROQ_AVAILABLE = True
 except ImportError:
-    print("❌  pip install groq"); sys.exit(1)
+    _GROQ_AVAILABLE = False
 
 import config as cfg
 from modules.indicators        import compute_all
 from modules.sr_zones          import build_sr_context, sr_for_prompt
+from modules.decision_engine   import deterministic_decision
 from modules.news_engine       import (
     build_news_context, build_shared_news_context, derive_symbol_news_context,
     format_news_for_prompt,
@@ -90,6 +92,8 @@ log = logging.getLogger(__name__)
 
 # ── Groq ────────────────────────────────────────────────────────
 def _build_groq_client(api_key: str):
+    if not _GROQ_AVAILABLE:
+        return None
     max_retries = int(getattr(cfg, "GROQ_CLIENT_MAX_RETRIES", 0) or 0)
     try:
         return Groq(api_key=api_key, max_retries=max_retries)
@@ -97,9 +101,11 @@ def _build_groq_client(api_key: str):
         return Groq(api_key=api_key)
 
 
+_groq_keys = getattr(cfg, "GROQ_API_KEYS", []) or []
 groq_clients = [
     _build_groq_client(api_key)
-    for api_key in getattr(cfg, "GROQ_API_KEYS", [cfg.GROQ_API_KEY])
+    for api_key in _groq_keys
+    if api_key
 ]
 
 # ── TF Map MT5 ───────────────────────────────────────────────────
@@ -183,6 +189,13 @@ groq_hourly_usage_by_key: dict = {}
 groq_daily_usage_by_key: dict = {}
 shared_news_cache = None
 shared_news_last_update: float = 0.0
+
+# ── Per-symbol state for deterministic decision engine ───────────
+_symbol_state: dict = {}  # {symbol: {mem_direction, last_indicators, last_sr_context, last_news_context, hurst_penalty}}
+
+# ── H1 indicator cache (H1 candle changes at most once per hour) ─
+_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float, "h1_candle_time": object}}
+H1_CACHE_TTL_SEC = 300    # 5 minutes
 
 
 def _set_symbol_status(symbol: str, status: str):
@@ -905,6 +918,44 @@ def get_system_prompt(sym_cfg: dict) -> str:
 
 
 def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+    """
+    Decision gateway: uses deterministic engine by default (no Groq key needed).
+    If GROQ_API_KEY is configured and groq is available, delegates to the Groq LLM.
+    Maintains backward compatibility with callers expecting {"action", "confidence", ...}.
+    """
+    # ── Deterministic path (default, no Groq key required) ───────
+    if not groq_clients or not getattr(cfg, "GROQ_API_KEY", ""):
+        state = _symbol_state.get(symbol, {})
+        direction = state.get("mem_direction", "")
+        indicators = state.get("last_indicators", {})
+        sr_context = state.get("last_sr_context", {})
+        news_ctx = state.get("last_news_context", None)
+
+        if not direction:
+            log.debug(f"[decision] {symbol}: sin dirección pre-calculada → HOLD")
+            return {"action": "HOLD", "confidence": 1, "reason": "Sin dirección"}
+
+        result = deterministic_decision(
+            symbol=symbol,
+            direction=direction,
+            indicators=indicators,
+            sr_context=sr_context,
+            news_context=news_ctx,
+            sym_cfg=sym_cfg,
+        )
+        return {
+            "action": result["decision"],
+            "confidence": result["confidence"],
+            "reason": result.get("reason", ""),
+            "score": result.get("score", 0.0),
+        }
+
+    # ── Groq LLM path (only when GROQ_API_KEY is set) ────────────
+    return _ask_groq_llm(symbol, context, sym_cfg, cache_key)
+
+
+def _ask_groq_llm(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> Optional[dict]:
+    """Original Groq LLM call — only invoked when GROQ_API_KEY is configured."""
     system_prompt = get_system_prompt(sym_cfg)
     global groq_cooldown_until, groq_call_cache
 
@@ -2259,14 +2310,33 @@ def _process_symbol(
     else:
         news_pause_notified.pop(symbol, None)
 
+    # ── Store context for deterministic decision engine ───────────
+    if symbol not in _symbol_state:
+        _symbol_state[symbol] = {}
+    _symbol_state[symbol]["last_indicators"] = ind
+    _symbol_state[symbol]["last_sr_context"] = (
+        sr_ctx.__dict__ if hasattr(sr_ctx, "__dict__") else sr_ctx
+    )
+    _symbol_state[symbol]["last_news_context"] = news_ctx
+
     hurst_val = ind.get("hurst", 0.5)
     min_hurst = sym_cfg.get("min_hurst", 0.40)
     hurst_allowed, hurst_reason = _should_allow_low_hurst_scalp(ind, sr_ctx, sym_cfg)
     if not hurst_allowed:
-        log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
-        last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
-        _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
-        return
+        if getattr(cfg, "SCALPING_ONLY", False):
+            # In scalping mode, low Hurst is a score penalty, not a hard block
+            hurst_penalty = (min_hurst - hurst_val) * 5  # up to ~2 point penalty
+            log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — penalty={hurst_penalty:.1f} (scalping mode)")
+            _set_symbol_status(symbol, f"📉 Hurst scalp penalizado {hurst_val:.2f}")
+            _symbol_state[symbol]["hurst_penalty"] = hurst_penalty
+            # Continue processing (don't skip)
+        else:
+            log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} — HOLD")
+            last_action = f"📊 Hurst bajo {symbol} ({hurst_val:.2f}<{min_hurst:.2f})"
+            _set_symbol_status(symbol, f"📊 Hurst bajo {hurst_val:.2f}<{min_hurst:.2f}")
+            return
+    else:
+        _symbol_state[symbol]["hurst_penalty"] = 0.0
     if hurst_val < min_hurst:
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
         _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
@@ -2275,8 +2345,10 @@ def _process_symbol(
     candle_stamp = _get_last_candle_stamp(df_entry)
     if h1_trend in ("BAJISTA_FUERTE", "BAJISTA"):
         mem_direction = "SELL"
+        _symbol_state[symbol]["mem_direction"] = mem_direction
     elif h1_trend in ("ALCISTA_FUERTE", "ALCISTA"):
         mem_direction = "BUY"
+        _symbol_state[symbol]["mem_direction"] = mem_direction
     else:
         # LATERAL_ALCISTA, LATERAL_BAJISTA, LATERAL → evaluar ambas direcciones
         feat_buy  = build_features(symbol, "BUY",  ind, sr_ctx, news_ctx, sym_cfg)
@@ -2346,6 +2418,8 @@ def _process_symbol(
             return
 
         cache_key = _build_groq_cache_key(symbol, "LATERAL", candle_stamp, ind) + "|" + ",".join(sorted(ready_actions))
+        # Store the first viable direction for the deterministic decision engine
+        _symbol_state[symbol]["mem_direction"] = ready_actions[0]
         context = build_lateral_context(
             symbol=symbol,
             ind=ind,
