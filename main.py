@@ -1019,11 +1019,12 @@ def build_lateral_context(
 #  ÓRDENES MT5
 # ════════════════════════════════════════════════════════════════
 
-def open_order(symbol: str, direction: str, sl: float, tp: float, volume: float) -> Optional[int]:
+def open_order(symbol: str, direction: str, sl: float, tp: float, volume: float) -> tuple:
+    """Returns (ticket, executed_price) or (None, None)."""
     action  = mt5.ORDER_TYPE_BUY if direction == "BUY" else mt5.ORDER_TYPE_SELL
     tick    = mt5.symbol_info_tick(symbol)
     if tick is None:
-        return None
+        return None, None
     price   = tick.ask if direction == "BUY" else tick.bid
     request = {
         "action":       mt5.TRADE_ACTION_DEAL,
@@ -1041,10 +1042,11 @@ def open_order(symbol: str, direction: str, sl: float, tp: float, volume: float)
     }
     result = mt5.order_send(request)
     if result.retcode == mt5.TRADE_RETCODE_DONE:
-        log.info(f"[orden] ✅ #{result.order} {direction} {symbol} vol={volume}")
-        return result.order
+        executed_price = float(result.price) if hasattr(result, 'price') and result.price else price
+        log.info(f"[orden] ✅ #{result.order} {direction} {symbol} vol={volume} req={price:.5f} exec={executed_price:.5f}")
+        return result.order, executed_price
     log.error(f"[orden] ❌ {result.comment} (retcode={result.retcode})")
-    return None
+    return None, None
 
 
 def move_sl(ticket: int, new_sl: float) -> bool:
@@ -1867,6 +1869,14 @@ def _process_symbol(
         "z_score":           ind.get("zscore_returns", {}).get("z_score", None),
     }
 
+    # Calcular spread actual en pips para el decision engine
+    _tick_spread = mt5.symbol_info_tick(symbol)
+    if _tick_spread is not None:
+        _spread_price = _tick_spread.ask - _tick_spread.bid
+        ind["spread_pips"] = _price_distance_to_pips(symbol, _spread_price)
+    else:
+        ind["spread_pips"] = 0.0
+
     if has_bot_position:
         _set_symbol_status(symbol, f"📂 Posiciones abiertas ({len(bot_sym_positions)}/{max_per_symbol})")
 
@@ -2407,11 +2417,23 @@ def _execute_decision(
         _set_symbol_status(symbol, "🌀 Hilbert bloqueó SELL")
         return
 
-    ticket = open_order(symbol, action, sl, tp, vol)
+    ticket, executed_price = open_order(symbol, action, sl, tp, vol)
     if ticket is None:
         last_action = f"❌ Orden fallida {symbol}"
         _set_symbol_status(symbol, "❌ Orden fallida")
         return
+
+    # Calcular slippage entre precio solicitado y precio de ejecución real
+    slippage_price = abs(executed_price - price)
+    slippage_pips = _price_distance_to_pips(symbol, slippage_price)
+    if slippage_pips > 0.1:
+        log.info(
+            f"[slippage] #{ticket} {symbol} {action}: "
+            f"req={price:.5f} exec={executed_price:.5f} slip={slippage_pips:.1f}pips"
+        )
+
+    # Usar executed_price como el precio real de entrada
+    price = executed_price
 
     # Registrar timestamp de apertura para cooldown
     last_trade_time[symbol] = time.time()
@@ -2440,6 +2462,7 @@ def _execute_decision(
         risk_amount=risk_amount,
         sl=sl,
         tp=tp,
+        slippage_pips=slippage_pips,
     )
     tickets_en_memoria.add(ticket)
 

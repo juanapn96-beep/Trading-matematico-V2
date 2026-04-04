@@ -3,9 +3,26 @@ ZAR v7 — Decision Engine Determinista
 Motor de decisión basado en reglas binarias repetibles (sin LLM).
 """
 import logging
+from datetime import datetime, timezone
 from modules.sentiment_data import get_sentiment_for_symbol
 
 log = logging.getLogger(__name__)
+
+
+def _get_session_quality(sym_cfg: dict) -> float:
+    """Retorna el factor de calidad de la sesión actual (0.0-1.0)."""
+    session_quality = sym_cfg.get("session_quality")
+    if not session_quality:
+        return 1.0  # Sin configuración = calidad completa (retrocompatible)
+    hour = datetime.now(timezone.utc).hour
+    if 0 <= hour < 7:
+        return float(session_quality.get("asian", 0.5))
+    elif 7 <= hour < 13:
+        return float(session_quality.get("london", 1.0))
+    elif 13 <= hour < 21:
+        return float(session_quality.get("ny", 1.0))
+    else:
+        return float(session_quality.get("dead", 0.3))
 
 
 def deterministic_decision(
@@ -22,6 +39,17 @@ def deterministic_decision(
     Returns:
         {"decision": "BUY"|"SELL"|"HOLD", "confidence": int, "reason": str, "score": float}
     """
+    # ═══ FILTRO: SPREAD MÁXIMO (hard block) ═══
+    spread_pips = float(indicators.get("spread_pips", 0.0) or 0.0)
+    max_spread = float(sym_cfg.get("max_spread_pips", 3.0))
+    if spread_pips > 0 and spread_pips > max_spread:
+        return {
+            "decision": "HOLD",
+            "confidence": 1,
+            "reason": f"SPREAD={spread_pips:.1f}>{max_spread:.1f}pips",
+            "score": 0.0,
+        }
+
     score = 0.0
     reasons = []
     max_score = 10.0
@@ -229,6 +257,13 @@ def deterministic_decision(
     # min_decision_score: minimum score to open a trade (default 5.0 out of max 10.0).
     # Lower to 4.0 for more aggressive scalping; raise to 6.0 for higher quality signals.
     min_score = sym_cfg.get("min_decision_score", 5.0)
+
+    # Ajuste por calidad de sesión: subir el umbral fuera de sesión óptima
+    session_q = _get_session_quality(sym_cfg)
+    if session_q < 1.0:
+        min_score = min_score / session_q
+        reasons.append(f"session_q={session_q:.1f}")
+
     confidence = max(1, min(10, int(score)))
     reason_str = " | ".join(reasons)
 
