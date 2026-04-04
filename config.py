@@ -467,6 +467,14 @@ FISHER_ENABLED  = True
 TF_ENTRY = "M1"
 TF_TREND = "M15"
 
+# FASE-D: H1 Bias Filter — sesgo H1 para contexto multi-timeframe
+# Cuando True, el bot computa un sesgo H1 (DEMA 21/55) y lo propaga
+# al motor determinístico como penalidad/bonus de score (no bloqueo duro).
+# - Scalp contra H1 BAJISTA (BUY) o H1 ALCISTA (SELL): -1.0 puntos de score.
+# - Scalp con H1 confirma: +0.5 puntos de score.
+# Esto prioriza entradas con H1 + M15 + M1 alineados (sniper triple-TF).
+H1_BIAS_ENABLED = _env_flag("H1_BIAS_ENABLED", True)
+
 # ================================================================
 #  NOTICIAS
 # ================================================================

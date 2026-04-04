@@ -128,7 +128,46 @@ El trailing en scalp mode era pip-based y correcto tras FASE A. Sin embargo:
 
 ---
 
-## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
+## [2026-04-04] - FASE D: Multi-Timeframe — H1 Bias Filter para Scalping
+
+### ANÁLISIS MULTI-TIMEFRAME
+
+El bot usaba TF_ENTRY=M1 (entradas) + TF_TREND=M15 (tendencia) + S/R de H1 (zonas).
+Pero no había un "sesgo H1" como filtro de calidad de dirección. Esto significa que un
+scalp BUY en M1 + M15 ALCISTA podría ejecutarse aunque H1 estuviera en tendencia BAJISTA.
+Los scalps contra H1 tienen menor probabilidad de éxito porque van contra la fuerza mayor.
+
+**Solución FASE D**: Añadir H1 bias (DEMA 21/55 en velas H1) como score modifier en
+el motor de decisión, sin bloquear — solo penaliza counter-trend y premia with-trend.
+
+### config.py
+- **`H1_BIAS_ENABLED = True`** *(nuevo)*: activa el filtro de sesgo H1.
+  Configurable vía `.env`: `H1_BIAS_ENABLED=false` para desactivarlo.
+  Documenta que TF_TREND=M15 es la tendencia operativa, H1 es el contexto macro.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`_get_h1_bias(symbol)`** *(nuevo)*: calcula sesgo H1 usando cruce DEMA(21/55).
+  Cache de 10 min (`_h1_bias_cache`) para no saturar MT5. Retorna "ALCISTA"/"BAJISTA"/"LATERAL".
+  Usa `get_candles(symbol, "H1", 80)` — 80 velas H1 = ~3.3 días de historia.
+- **`_process_symbol()`**: cuando `H1_BIAS_ENABLED=True`, llama `_get_h1_bias()` y
+  almacena `ind["h1_bias"]` y `_symbol_state[symbol]["h1_bias"]` para que el motor
+  determinístico pueda acceder al sesgo H1. No bloquea — solo enriquece el contexto.
+- **[Agente: GitHub Copilot]**
+
+### modules/decision_engine.py
+- **`deterministic_decision()`** — FASE D H1 bias scoring:
+  - BUY con H1="BAJISTA" → `score -= 1.0` (counter-trend penalty)
+  - SELL con H1="ALCISTA" → `score -= 1.0` (counter-trend penalty)
+  - BUY con H1="ALCISTA" → `score += 0.5` (with-trend bonus)
+  - SELL con H1="BAJISTA" → `score += 0.5` (with-trend bonus)
+  Efecto práctico con `min_decision_score=5.0`: un counter-trend scalp necesita
+  5.0 + 1.0 = 6.0 puntos de las otras señales para ejecutarse — filtra setups débiles.
+- **[Agente: GitHub Copilot]**
+
+---
+
+
 
 ### modules/data_providers.py *(nuevo)*
 - **`TwelveDataProvider`**: cliente REST para Twelve Data API — datos OHLCV en tiempo real de índices (US500m, NAS100m, GER40m) y forex donde MT5 no da volumen real. Métodos: `get_realtime_ohlcv()`, `get_quote()`. Cache en memoria con TTL de 5 min. Rate limiting: 8 calls/min (free tier 800/día). API key desde `.env`: `TWELVE_DATA_KEY`. Fallback silencioso si falla o key no configurada.

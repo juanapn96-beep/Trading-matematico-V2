@@ -193,10 +193,45 @@ shared_news_last_update: float = 0.0
 # ── Per-symbol state for deterministic decision engine ───────────
 _symbol_state: dict = {}  # {symbol: {mem_direction, last_indicators, last_sr_context, last_news_context, hurst_penalty}}
 
-# ── H1 indicator cache (H1 candle changes at most once per hour) ─
-_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float, "h1_candle_time": object}}
-H1_CACHE_TTL_SEC = 300    # 5 minutes
+# ── M15 indicator cache (TF_TREND candle — refrescado cada 5 min) ─
+_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float}}
+H1_CACHE_TTL_SEC = 300    # 5 minutos — refreshed even within same candle for low-latency
 
+# ── FASE-D: H1 bias cache (tendencia H1 DEMA para filtrar contra-tendencia) ─
+_h1_bias_cache: dict = {}  # {symbol: {"bias": "ALCISTA"|"BAJISTA"|"LATERAL", "ts": float}}
+H1_BIAS_CACHE_TTL_SEC = 600  # 10 min — H1 velas cambian lentamente
+
+
+def _get_h1_bias(symbol: str) -> str:
+    """
+    FASE-D: Calcula el sesgo H1 usando cruce DEMA(21/55) en velas H1.
+    Retorna: 'ALCISTA' | 'BAJISTA' | 'LATERAL'
+    Cache de 10 min para no saturar MT5 con peticiones H1.
+    """
+    now_ts = time.time()
+    cached = _h1_bias_cache.get(symbol, {})
+    if cached and (now_ts - cached.get("ts", 0)) < H1_BIAS_CACHE_TTL_SEC:
+        return str(cached.get("bias", "LATERAL"))
+
+    df_h1b = get_candles(symbol, "H1", 80)
+    if df_h1b is None or len(df_h1b) < 56:
+        return "LATERAL"
+
+    close = df_h1b["close"]
+    ema21 = close.ewm(span=21, adjust=False).mean()
+    dema_fast = (2 * ema21 - ema21.ewm(span=21, adjust=False).mean()).iloc[-1]
+    ema55 = close.ewm(span=55, adjust=False).mean()
+    dema_slow = (2 * ema55 - ema55.ewm(span=55, adjust=False).mean()).iloc[-1]
+
+    if dema_fast > dema_slow * 1.00005:
+        bias = "ALCISTA"
+    elif dema_fast < dema_slow * 0.99995:
+        bias = "BAJISTA"
+    else:
+        bias = "LATERAL"
+
+    _h1_bias_cache[symbol] = {"bias": bias, "ts": now_ts}
+    return bias
 
 def _set_symbol_status(symbol: str, status: str):
     global symbol_status_cache
@@ -2418,6 +2453,15 @@ def _process_symbol(
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
         _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
 
+
+    # FASE-D: H1 bias — propagar sesgo H1 a indicadores para motor determinístico
+    if bool(getattr(cfg, "H1_BIAS_ENABLED", True)):
+        h1_bias = _get_h1_bias(symbol)
+        ind["h1_bias"] = h1_bias
+        _symbol_state[symbol]["h1_bias"] = h1_bias
+        log.debug(f"[{symbol}] H1 bias: {h1_bias}")
+    else:
+        ind["h1_bias"] = "LATERAL"
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
     if h1_trend in ("BAJISTA_FUERTE", "BAJISTA"):
