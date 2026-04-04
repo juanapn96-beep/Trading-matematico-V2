@@ -391,15 +391,15 @@ HTML_TEMPLATE = """
       </section>
 
       <section class="panel">
-        <h2>Último análisis Groq</h2>
+        <h2>Último análisis de decisión</h2>
         <div id="analysis" class="analysis"></div>
       </section>
     </section>
 
     <section class="grid">
       <section class="panel">
-        <h2>Métricas Groq</h2>
-        <div id="groqMetrics" class="status-list"></div>
+        <h2>Métricas del motor de decisión</h2>
+        <div id="decisionMetrics" class="status-list"></div>
       </section>
 
       <section class="panel">
@@ -529,7 +529,7 @@ HTML_TEMPLATE = """
     function renderAnalysis(analysis) {
       const container = document.getElementById('analysis');
       if (!analysis || !analysis.symbol) {
-        container.innerHTML = '<div class="empty">Aún no hay análisis Groq disponible.</div>';
+        container.innerHTML = '<div class="empty">Aún no hay análisis de decisión disponible.</div>';
         return;
       }
 
@@ -570,10 +570,10 @@ HTML_TEMPLATE = """
       }).join('');
     }
 
-    function renderGroqMetrics(metrics) {
-      const container = document.getElementById('groqMetrics');
+    function renderDecisionMetrics(metrics) {
+      const container = document.getElementById('decisionMetrics');
       if (!metrics || Object.keys(metrics).length === 0) {
-        container.innerHTML = '<div class="empty">Sin métricas Groq.</div>';
+        container.innerHTML = '<div class="empty">Sin métricas del motor.</div>';
         return;
       }
 
@@ -585,7 +585,7 @@ HTML_TEMPLATE = """
         ['Filtrados por gate', metrics.skipped_by_gate_total || 0],
         ['Filtrados por presupuesto', metrics.skipped_by_budget_total || 0],
         ['Saltados por cooldown', metrics.cooldown_skips_total || 0],
-        ['429 cuota', metrics.quota_hits_total || 0],
+        ['Quota hits', metrics.quota_hits_total || 0],
         ['Fallback HOLD', metrics.fallback_holds_total || 0],
       ];
 
@@ -594,11 +594,7 @@ HTML_TEMPLATE = """
           <strong>${label}</strong>
           <div class="mono">${value}</div>
         </div>
-      `).join('') + (
-        metrics.cooldown_until
-          ? `<div class="status-item"><strong>Cooldown hasta</strong><div>${metrics.cooldown_until}</div></div>`
-          : ''
-      );
+      `).join('');
     }
 
     function renderLastAction(payload) {
@@ -700,8 +696,8 @@ HTML_TEMPLATE = """
         setText('dailyPnl', money.format(payload.daily_pnl || 0));
         setText('cycle', String(payload.cycle || 0));
         renderPositions(payload.active_trades || []);
-        renderAnalysis(payload.last_groq_analysis || {});
-        renderGroqMetrics(payload.groq_metrics || {});
+        renderAnalysis(payload.last_decision_analysis || {});
+        renderDecisionMetrics(payload.decision_metrics || {});
         renderStatus(payload.symbol_status || {}, payload.symbol_details || {});
         renderLastAction(payload);
         renderMemoryNews(payload);
@@ -1103,7 +1099,8 @@ def create_app(status_provider):
         payload.setdefault("updated_at", datetime.now(timezone.utc).isoformat())
         payload.setdefault("active_trades", [])
         payload.setdefault("symbol_status", {})
-        payload.setdefault("last_groq_analysis", {})
+        payload.setdefault("last_decision_analysis", {})
+        payload.setdefault("decision_metrics", {})
         return jsonify(payload)
 
     @app.get("/api/equity_curve")

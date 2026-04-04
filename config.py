@@ -99,29 +99,14 @@ BROKER_SUFFIX = os.environ.get("BROKER_SUFFIX", "")
 _NO_SUFFIX = {"USTEC", "DE40", "US30"}
 
 # ================================================================
-#  GROQ
+#  MOTOR DE DECISIÓN DETERMINISTA (sin LLM)
 # ================================================================
-GROQ_API_KEY   = os.environ.get("GROQ_API_KEY", "")
-GROQ_API_KEYS  = [GROQ_API_KEY] if GROQ_API_KEY else []
-for _extra_groq_key in _collect_numbered_env("GROQ_API_KEY"):
-    if _extra_groq_key not in GROQ_API_KEYS:
-        GROQ_API_KEYS.append(_extra_groq_key)
-for _extra_groq_key in _split_env_csv("GROQ_API_KEYS"):
-    if _extra_groq_key not in GROQ_API_KEYS:
-        GROQ_API_KEYS.append(_extra_groq_key)
-GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
-GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
-GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
-GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "300") or 300)
-GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "2") or 2)
-GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120") or 120)
-GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
-GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
-GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "1.8") or 1.8)
-GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
+DECISION_SYMBOL_COOLDOWN_SEC = int(os.environ.get("DECISION_SYMBOL_COOLDOWN_SEC", "120") or 120)
+DECISION_MIN_ENTRY_QUALITY   = int(os.environ.get("DECISION_MIN_ENTRY_QUALITY", "3") or 3)
+DECISION_ENTRY_STRONG_ONLY   = _env_flag("DECISION_ENTRY_STRONG_ONLY", True)
+DECISION_ENTRY_CONF_MULT     = float(os.environ.get("DECISION_ENTRY_CONF_MULT", "2.0") or 2.0)
 ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
-# Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido)
-# y Groq sólo se consulta cuando Hilbert está en extremo de ciclo (LOCAL_MIN/LOCAL_MAX).
+# Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido).
 SCALPING_ONLY            = _env_flag("SCALPING_ONLY", True)
 SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
 SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.18") or 0.18)
@@ -145,18 +130,12 @@ SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.
 # Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
 # Esto evita trades de $0.50 que no justifican el riesgo ni el spread.
 MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "5.0") or 5.0)
-SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.82") or 0.82)
 # ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
 # Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
 # para calcular SL y TP. Esto hace que los stops sean proporcionales al
 # movimiento real del timeframe en que se opera.
 SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
 SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
-SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "8.0") or 8.0)
-SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
-SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
-SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
-SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",     "5.0") or 5.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================
@@ -216,6 +195,7 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
+        "min_decision_score": 5.5,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.40,
         "sr_lookback":    100,
@@ -255,6 +235,7 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
+        "min_decision_score": 5.0,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.10,
         "sr_lookback":    100,
@@ -293,6 +274,7 @@ SYMBOLS = {
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
+        "min_decision_score": 5.0,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.12,
         "sr_lookback":    100,
@@ -332,6 +314,7 @@ SYMBOLS = {
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
+        "min_decision_score": 5.5,
         "min_hurst":      0.35,
         "sr_tolerance_pct": 0.25,
         "sr_lookback":    100,
@@ -371,6 +354,7 @@ SYMBOLS = {
         "rsi_oversold":   28,
         "rsi_overbought": 72,
         "min_confidence": 7,
+        "min_decision_score": 6.0,
         "min_hurst":      0.40,
         "sr_tolerance_pct": 0.50,
         "sr_lookback":    100,
@@ -502,10 +486,10 @@ MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
 
 # Confluence Matrix: umbrales para el score ponderado de 3 pilares
 # [-3, +3] — mayor número = requisito más estricto para operar
-CONFLUENCE_MIN_SCORE         = 0.25  # Score mínimo absoluto para permitir entrada
+CONFLUENCE_MIN_SCORE         = 0.50  # Score mínimo absoluto para permitir entrada
 # (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
 # Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
-# → el símbolo muestra "confluencia débil" pero aún se pregunta a Groq.
+# → el símbolo muestra "confluencia débil" pero aún puede ser evaluado por el motor.
 
 # ================================================================
 #  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING
@@ -521,7 +505,7 @@ KELLY_MIN_TRADES  = 100    # Mínimo de trades históricos (por símbolo) para a
                             # Con menos trades, el intervalo de confianza del win_rate
                             # es demasiado amplio para que Kelly sea confiable
 
-# Multiplicador del umbral duro de confluencia (pre-Groq + post-Groq gate).
+# Multiplicador del umbral duro de confluencia (pre-gate + post-gate).
 # Umbral efectivo = CONFLUENCE_MIN_SCORE × CONFLUENCE_HARD_GATE_MULT
 # Ejemplo con defaults: 0.3 × 2 = 0.6 sobre escala [-3, +3]
 # Aumentar → más permisivo (solo bloquea señales muy contradictorias)
@@ -638,16 +622,6 @@ BACKTEST_DEFAULT_END   = "2025-12-31"
 BACKTEST_WALK_FORWARD_TRAIN_MONTHS = 6   # Meses de ventana in-sample
 BACKTEST_WALK_FORWARD_TEST_MONTHS  = 2   # Meses de ventana out-of-sample
 BACKTEST_WALK_FORWARD_STEP_MONTHS  = 1   # Avance por iteración
-
-# ================================================================
-#  PRESUPUESTO GROQ (CONTROL DURO DE COSTO)
-# ================================================================
-# Configurado vía variables de entorno GROQ_MAX_CALLS_PER_HOUR y
-# GROQ_MAX_CALLS_PER_DAY (ver sección GROQ al inicio de este archivo).
-# 0 = desactivado. Si se define >0, el límite se interpreta por key/proyecto.
-# Cuando una key alcanza su cupo, el bot rota a la siguiente disponible.
-# Si todas las keys alcanzan el límite, usa fallback HOLD para evitar gasto excedente.
-
 
 # ================================================================
 #  FASE 11 — EXTERNAL DATA PROVIDERS
