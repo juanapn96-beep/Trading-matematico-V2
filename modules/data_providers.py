@@ -102,14 +102,16 @@ class TwelveDataProvider:
 
     BASE_URL = "https://api.twelvedata.com"
 
-    # Mapeo de símbolos Exness → Twelve Data
+    # Mapeo de símbolos Exness/IC Markets → Twelve Data
+    # Incluye variantes con sufijo "m" (Exness) y sin sufijo (IC Markets).
+    # USTEC y DE40 no usan sufijo en ningún broker (_NO_SUFFIX en config.py).
     SYMBOL_MAP: dict[str, str] = {
-        "US500m":  "SPX",       # S&P 500
-        "USTEC":   "NDX",       # Nasdaq 100
-        "DE40":    "DAX",       # DAX 40
-        "USOILm":  "CL",        # Crude Oil
-        "XAUUSDm": "XAU/USD",   # Gold
-        "BTCUSDm": "BTC/USD",   # Bitcoin
+        "US500m":  "SPX",     "US500":  "SPX",      # S&P 500
+        "USTEC":   "NDX",                            # Nasdaq 100 (sin sufijo siempre)
+        "DE40":    "DAX",                            # DAX 40    (sin sufijo siempre)
+        "USOILm":  "CL",      "USOIL":  "CL",       # Crude Oil
+        "XAUUSDm": "XAU/USD", "XAUUSD": "XAU/USD",  # Gold
+        "BTCUSDm": "BTC/USD", "BTCUSD": "BTC/USD",  # Bitcoin
     }
 
     def __init__(
@@ -257,10 +259,12 @@ class PolygonProvider:
 
     BASE_URL = "https://api.polygon.io"
 
-    # Mapeo a tickers de Polygon
+    # Mapeo a tickers de Polygon.
+    # Incluye variantes con sufijo "m" (Exness) y sin sufijo (IC Markets).
+    # USTEC no usa sufijo en ningún broker (_NO_SUFFIX en config.py).
     SYMBOL_MAP: dict[str, str] = {
-        "US500m":  "I:SPX",   # S&P 500 index
-        "USTEC":   "I:NDX",   # Nasdaq 100 index
+        "US500m": "I:SPX", "US500": "I:SPX",  # S&P 500 index
+        "USTEC":  "I:NDX",                    # Nasdaq 100 index (sin sufijo siempre)
     }
 
     def __init__(
@@ -425,14 +429,15 @@ class TrueFXLoader:
     Los archivos son >25 MB y no están en el repo (ver .gitignore).
     """
 
-    # Mapeo Exness → nombre en archivo TrueFX
+    # Mapeo Exness/IC Markets → nombre en archivo TrueFX
+    # Incluye variantes con sufijo "m" (Exness) y sin sufijo (IC Markets).
     SYMBOL_MAP: dict[str, str] = {
-        "EURUSDm": "EURUSD",
-        "GBPUSDm": "GBPUSD",
-        "USDJPYm": "USDJPY",
-        "EURJPYm": "EURJPY",
-        "GBPJPYm": "GBPJPY",
-        "XAUUSDm": "XAUUSD",
+        "EURUSDm": "EURUSD", "EURUSD": "EURUSD",
+        "GBPUSDm": "GBPUSD", "GBPUSD": "GBPUSD",
+        "USDJPYm": "USDJPY", "USDJPY": "USDJPY",
+        "EURJPYm": "EURJPY", "EURJPY": "EURJPY",
+        "GBPJPYm": "GBPJPY", "GBPJPY": "GBPJPY",
+        "XAUUSDm": "XAUUSD", "XAUUSD": "XAUUSD",
     }
 
     # Formato de timestamp en los archivos TrueFX

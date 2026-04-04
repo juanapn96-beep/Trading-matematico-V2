@@ -933,7 +933,7 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
 
         if not direction:
             log.debug(f"[decision] {symbol}: sin dirección pre-calculada → HOLD")
-            return {"action": "HOLD", "confidence": 1, "reason": "Sin dirección"}
+            return {"decision": "HOLD", "confidence": 1, "reason": "Sin dirección"}
 
         result = deterministic_decision(
             symbol=symbol,
@@ -944,7 +944,7 @@ def ask_groq(symbol: str, context: str, sym_cfg: dict, cache_key: str = "") -> O
             sym_cfg=sym_cfg,
         )
         return {
-            "action": result["decision"],
+            "decision": result["decision"],
             "confidence": result["confidence"],
             "reason": result.get("reason", ""),
             "score": result.get("score", 0.0),
@@ -2232,7 +2232,20 @@ def _process_symbol(
         _set_symbol_status(symbol, "⚠️ Datos insuficientes de MT5")
         return
 
-    ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
+    _now_h1 = time.time()
+    _cached_h1 = _h1_cache.get(symbol)
+    if _cached_h1 is not None and (_now_h1 - _cached_h1.get("timestamp", 0)) < H1_CACHE_TTL_SEC:
+        # Reuse cached H1 indicators; update the fast-changing price fields in place.
+        ind = _cached_h1["indicators"]
+        ind["price"] = round(float(df_h1["close"].iloc[-1]), 4)
+        if df_entry is not None and len(df_entry) > 0:
+            ind["entry_price"] = round(float(df_entry["close"].iloc[-1]), 4)
+            if "time" in df_entry.columns:
+                ind["entry_candle_time"] = pd.Timestamp(df_entry["time"].iloc[-1]).isoformat()
+        log.debug(f"[{symbol}] H1 cache hit — indicadores reutilizados")
+    else:
+        ind = compute_all(df_h1, symbol, sym_cfg, df_entry=df_entry)
+        _h1_cache[symbol] = {"indicators": ind, "timestamp": _now_h1}
     ind_cache[symbol] = ind
     symbol_detail_cache[symbol] = {
         "enhanced_regime":   ind.get("enhanced_regime", "UNKNOWN"),
