@@ -197,6 +197,23 @@ def deterministic_decision(
         score -= hurst_penalty
         reasons.append(f"hurst_pen=-{hurst_penalty:.1f}")
 
+    # FASE-D: H1 bias — penalizar counter-trend scalps vs sesgo H1
+    # Un scalp contra el H1 tiene menor probabilidad de éxito.
+    # Penalidad suave (-1.0): no bloquea, pero sube el bar para pasar min_score.
+    h1_bias = str(indicators.get("h1_bias", "LATERAL") or "LATERAL")
+    if direction == "BUY" and h1_bias == "BAJISTA":
+        score -= 1.0
+        reasons.append("H1_bias=BAJISTA✗")
+    elif direction == "SELL" and h1_bias == "ALCISTA":
+        score -= 1.0
+        reasons.append("H1_bias=ALCISTA✗")
+    elif direction == "BUY" and h1_bias == "ALCISTA":
+        score += 0.5
+        reasons.append("H1_bias=ALCISTA✓")
+    elif direction == "SELL" and h1_bias == "BAJISTA":
+        score += 0.5
+        reasons.append("H1_bias=BAJISTA✓")
+
     # min_decision_score: minimum score to open a trade (default 5.0 out of max 10.0).
     # Lower to 4.0 for more aggressive scalping; raise to 6.0 for higher quality signals.
     min_score = sym_cfg.get("min_decision_score", 5.0)

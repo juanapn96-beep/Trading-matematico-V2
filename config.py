@@ -112,12 +112,13 @@ for _extra_groq_key in _split_env_csv("GROQ_API_KEYS"):
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
 GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
-GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "300") or 300)
-GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "2") or 2)
+# FIX FASE-A: valores únicos para scalping — cooldown corto + calidad estricta
 GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120") or 120)
 GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
 GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
-GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "1.8") or 1.8)
+# FASE-B: GROQ_ENTRY_CONF_MULT 1.8 → 2.0 para threshold premium sniper.
+# Con CONFLUENCE_MIN_SCORE=0.50: premium = 0.50 * 2.0 = 1.00 — señal fuerte.
+GROQ_ENTRY_CONF_MULT     = float(os.environ.get("GROQ_ENTRY_CONF_MULT", "2.0") or 2.0)
 GROQ_CLIENT_MAX_RETRIES  = int(os.environ.get("GROQ_CLIENT_MAX_RETRIES", "0") or 0)
 ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
 # Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido)
@@ -140,23 +141,21 @@ SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1",  "5.
 SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2",  "8.0") or  8.0)
 SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "12.0") or 12.0)
 SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "18.0") or 18.0)
+# FASE-C: Stage 5 — protección final cerca del TP (25+ pips → lock 85%).
+# Previene perder >85% del profit ganado cuando el trade ya está muy cerca del TP.
+# Ejemplo EURUSD (TP=24 pips): Stage 5 a 25 pips → cerca de TP, lock 85% del camino.
+SCALPING_BE_PIPS_STAGE_5 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_5", "25.0") or 25.0)
 SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.0") or  5.0)
 # Ganancia mínima esperada en USD para abrir una operación.
 # Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
 # Esto evita trades de $0.50 que no justifican el riesgo ni el spread.
 MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "5.0") or 5.0)
-SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.82") or 0.82)
 # ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
-# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
+# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1) en vez de ATR M15/H1
 # para calcular SL y TP. Esto hace que los stops sean proporcionales al
 # movimiento real del timeframe en que se opera.
 SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
 SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
-SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "8.0") or 8.0)
-SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
-SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
-SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
-SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",     "5.0") or 5.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================
@@ -228,6 +227,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      30,
+        "min_decision_score":     5.5,   # FASE-B sniper: XAUUSD exige score alto (volátil)
     },
 
     # ── 2. EUR/USD — 24/5, par más líquido del mundo ─────────────
@@ -267,9 +267,8 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      25,
+        "min_decision_score":     5.0,   # FASE-B sniper: EURUSD ciclos claros
     },
-
-    # ── 3. GBP/USD — 24/5, alta volatilidad para scalping ────────
     _sym("GBPUSD"): {
         "name":           "Libra / Dólar (Cable)",
         "currencies":     ["GBP", "USD"],
@@ -305,9 +304,8 @@ SYMBOLS = {
         "memory_block_threshold": 0.88,
         "memory_warn_threshold":  0.78,
         "memory_decay_days":      25,
+        "min_decision_score":     5.0,   # FASE-B sniper: GBPUSD momentum exige confirmación
     },
-
-    # ── 4. S&P 500 — sesión americana, alta volatilidad ──────────
     _sym("US500"): {
         "name":           "S&P 500",
         "currencies":     ["USD"],
@@ -344,6 +342,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.86,
         "memory_warn_threshold":  0.76,
         "memory_decay_days":      25,
+        "min_decision_score":     5.5,   # FASE-B sniper: US500 requiere momentum claro
     },
 
     # ── 5. BITCOIN — 24/7, alta volatilidad ─────────────────────
@@ -383,6 +382,7 @@ SYMBOLS = {
         "memory_block_threshold": 0.85,
         "memory_warn_threshold":  0.75,
         "memory_decay_days":      20,
+        "min_decision_score":     6.0,   # FASE-B sniper: BTCUSD más volátil, exige señal más fuerte
     },
 }
 
@@ -467,6 +467,14 @@ FISHER_ENABLED  = True
 TF_ENTRY = "M1"
 TF_TREND = "M15"
 
+# FASE-D: H1 Bias Filter — sesgo H1 para contexto multi-timeframe
+# Cuando True, el bot computa un sesgo H1 (DEMA 21/55) y lo propaga
+# al motor determinístico como penalidad/bonus de score (no bloqueo duro).
+# - Scalp contra H1 BAJISTA (BUY) o H1 ALCISTA (SELL): -1.0 puntos de score.
+# - Scalp con H1 confirma: +0.5 puntos de score.
+# Esto prioriza entradas con H1 + M15 + M1 alineados (sniper triple-TF).
+H1_BIAS_ENABLED = _env_flag("H1_BIAS_ENABLED", True)
+
 # ================================================================
 #  NOTICIAS
 # ================================================================
@@ -502,10 +510,15 @@ MICROSTRUCTURE_FVG_MAX_AGE   = 20    # FVGs más viejos que esto → ignorados
 
 # Confluence Matrix: umbrales para el score ponderado de 3 pilares
 # [-3, +3] — mayor número = requisito más estricto para operar
-CONFLUENCE_MIN_SCORE         = 0.25  # Score mínimo absoluto para permitir entrada
-# (0.0 = sin filtro, 0.5 = moderado, 1.0 = estricto sniper)
+# FASE-B: subido de 0.25 → 0.50 para entradas sniper.
+# En escala [-3,+3], 0.25 = cualquier inclinación mínima (demasiado permisivo).
+# 0.50 = inclinación moderada — requiere al menos 1 pilar firmemente alineado
+#       más otro ligeramente alineado, o 1 pilar muy fuertemente alineado.
+# Umbral premium para GROQ_ENTRY_CONF_MULT=2.0: 0.50 × 2.0 = 1.00 (señal sniper).
+CONFLUENCE_MIN_SCORE         = 0.50  # Score mínimo absoluto para permitir entrada
+# (0.0 = sin filtro, 0.50 = moderado sniper, 1.0 = estricto sniper puro)
 # Si el score total está entre -CONFLUENCE_MIN_SCORE y +CONFLUENCE_MIN_SCORE
-# → el símbolo muestra "confluencia débil" pero aún se pregunta a Groq.
+# → el símbolo muestra "confluencia débil" y se descarta sin consultar Groq.
 
 # ================================================================
 #  FASE 2 — NEURAL BRAIN v3 + KELLY POSITION SIZING

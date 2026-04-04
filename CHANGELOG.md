@@ -4,7 +4,170 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
-## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
+## [2026-04-04] - FASE A: Análisis + Corrección de Bugs Críticos en config.py y main.py
+
+### ANÁLISIS HONESTO DEL BOT (estado previo a esta fase)
+
+El bot tiene una arquitectura sólida con 3 pilares (estadístico, matemático, microestructura),
+trailing stop por progreso de TP, Kelly sizing, policy engine, scorecard jerárquico,
+5 símbolos de alta liquidez y modo scalping M1. Sin embargo, se detectaron 5 bugs críticos
+que silenciosamente anulaban los fixes documentados en v7.0:
+
+**BUGS ENCONTRADOS (todos en config.py / main.py):**
+
+1. **`SCALPING_TP_MULT` definido dos veces** — El comentario dice "FIX v7.0: 0.82→0.98"
+   pero líneas más abajo se redefinía a 0.82. Python usa la última definición → el TP
+   efectivo era 0.82 (valor pre-fix). Causa directa de que los SELL se rechazaran en el
+   gate check por R:R insuficiente.
+
+2. **`SCALPING_BE_PIPS_STAGE_1/2/3/4` definidos dos veces** — Valores v7.0 (5/8/12/18 pips)
+   sobrescritos por valores mayores (8/12/18/25 pips). El trailing se activaba demasiado
+   tarde, acumulando menos ganancias.
+
+3. **`GROQ_SYMBOL_COOLDOWN_SEC` definido dos veces** — 300s y 120s en líneas consecutivas.
+   Valor efectivo 120s (correcto para scalping), pero la duplicación era fuente de confusión.
+
+4. **`GROQ_MIN_ENTRY_QUALITY` definido dos veces** — 2 y 3 en líneas consecutivas.
+   Valor efectivo 3 (correcto), pero igual generaba confusión.
+
+5. **Inconsistencia gate vs ejecución en scalping** — `_is_groq_candidate_ready` calculaba
+   el TP con la fórmula sym_cfg × SCALPING_TP_MULT (= 0.82) para el gate check, pero
+   `_execute_decision` calculaba con `atr_entry × SCALPING_TP_ATR_MULT (= 6.0)`. Dos
+   fórmulas distintas para el mismo trade → setups válidos eran rechazados en el gate.
+
+### config.py
+- **Bug 1 corregido**: Eliminada la segunda definición de `SCALPING_TP_MULT = 0.82`.
+  Valor efectivo ahora: `0.98` (FIX v7.0 restaurado).
+- **Bug 2 corregido**: Eliminadas las segundas definiciones de `SCALPING_BE_PIPS_STAGE_1/2/3/4`
+  con valores 8/12/18/25. Valores efectivos ahora: `5 / 8 / 12 / 18 pips` (v7.0 restaurados).
+- **Bug 3 corregido**: Eliminada la primera definición de `GROQ_SYMBOL_COOLDOWN_SEC = 300`.
+  Valor único ahora: `120s`.
+- **Bug 4 corregido**: Eliminada la primera definición de `GROQ_MIN_ENTRY_QUALITY = 2`.
+  Valor único ahora: `3`.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **Bug 5 corregido — `_compute_trade_plan()`**: en modo `SCALPING_ONLY=True`, la función
+  ahora usa la misma fórmula que `_execute_decision`: `SL = price ± atr_entry × SCALPING_SL_ATR_MULT`
+  y `TP = price ± atr_entry × SCALPING_TP_ATR_MULT`. Esto garantiza que el gate check
+  y la ejecución evalúen exactamente el mismo SL/TP (R:R = 6.0/3.0 = 2.0 fijo).
+- **`_is_groq_candidate_ready()`**: eliminado el bloque que aplicaba `SCALPING_TP_MULT`
+  al plan (ya no es necesario — `_compute_trade_plan` entrega el plan correcto).
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-04-04] - FASE B: Mejoras de Calidad de Entrada — Sniper Scalping
+
+### ANÁLISIS DE CALIDAD DE ENTRADA (estado previo a esta fase)
+
+Con `CONFLUENCE_MIN_SCORE = 0.25` en una escala [-3, +3], el gate de entrada permitía
+señales con alineación mínima de pilares (P1=+0.3, P2=0, P3=0 → total=0.30 → pasa).
+Esto no es "sniper". Para scalping de alta precisión necesitamos señales donde al menos
+2 pilares estén moderadamente alineados. El umbral correcto para "sniper" es 0.50.
+
+Además, las estrategias de ciclo (VOLATILITY_CYCLE, CYCLE_REVERSION, CRYPTO_WAVE) no
+requerían confirmación de ciclo activo — se podía entrar en mitad de ciclo sin que
+Hilbert ni Fisher confirmaran el punto de reversión.
+
+### config.py
+- **`CONFLUENCE_MIN_SCORE`**: `0.25 → 0.50` — umbral moderado sniper. Ahora requiere
+  inclinación significativa de los 3 pilares para pasar el gate de entrada. El umbral
+  premium con `GROQ_ENTRY_CONF_MULT=2.0` queda en `0.50 × 2.0 = 1.00` (señal fuerte).
+- **`GROQ_ENTRY_CONF_MULT`**: `1.8 → 2.0` — eleva el threshold "premium" de confluencia
+  a ±1.0, un tercio de la escala máxima. Solo señales con 2+ pilares claramente alineados
+  pasan como "confluencia premium".
+- **`min_decision_score` por símbolo** *(nuevo campo)*: configurado por símbolo en `SYMBOLS`
+  para ajustar la exigencia del motor determinístico según la volatilidad del activo:
+  - XAUUSD: `5.5` (volátil, requiere confirmación más sólida)
+  - EURUSD: `5.0` (ciclos claros, estándar)
+  - GBPUSD: `5.0` (momentum exige confirmación)
+  - US500: `5.5` (requiere momentum claro antes de entrar)
+  - BTCUSD: `6.0` (el más volátil — señal más fuerte obligatoria)
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`_evaluate_strategy_specific_gate()`** — VOLATILITY_CYCLE / CYCLE_REVERSION / CRYPTO_WAVE:
+  Añadido gate sniper de ciclo. Para BUY, se requiere al menos una de:
+  `Hilbert == LOCAL_MIN` OR `Fisher < -2.0` OR `in_strong_zone`. Para SELL: `LOCAL_MAX`
+  OR `Fisher > 2.0` OR zona fuerte. Sin confirmación de ciclo/zona → rechazado.
+  Esto garantiza entradas en puntos de alta probabilidad de reversión (extremos de ciclo).
+- **`_evaluate_strategy_specific_gate()`** — MOMENTUM strategies: actualizado umbral
+  de confluencia a `CONFLUENCE_MIN_SCORE × 1.2 = 0.60` (coherente con nuevo valor 0.50).
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-04-04] - FASE C: Trailing Stop Optimización para Scalping M1
+
+### ANÁLISIS DE TRAILING STOP
+
+El trailing en scalp mode era pip-based y correcto tras FASE A. Sin embargo:
+1. El ATR usado como fallback (`ind.get("atr")`) era el ATR del TF de tendencia (M15),
+   no el ATR de entrada (M1). En scalp mode la referencia es M1.
+2. Solo existían 4 stages de protección (5/8/12/18 pips → 15/30/50/70%).
+   Después de 18 pips ganados, no había protección adicional hasta el TP.
+   Un trade que llegaba a 25 pips podía perder de vuelta al nivel del Stage 4 (12.6 pips).
+
+### main.py
+- **`_manage_trailing_stop()`** — ATR source: `atr_val` ahora usa `atr_entry` (ATR M1)
+  con fallback a `atr` (ATR M15) cuando `atr_entry` no está disponible. El ATR M1 es
+  el de referencia para scalping y el correcto para el buffer de protección BE.
+- **`_manage_trailing_stop()`** — Stage 5 añadido: `gained_pips >= SCALPING_BE_PIPS_STAGE_5`
+  (25 pips) → lock 85% del profit acumulado. Previene perder >15% del camino ganado
+  cuando el trade ya está muy cerca del TP. Stage_num=6 (supera al Stage 4 con num=5).
+- **[Agente: GitHub Copilot]**
+
+### config.py
+- **`SCALPING_BE_PIPS_STAGE_5 = 25.0`** *(nuevo)*: umbral para Stage 5 (25 pips → lock 85%).
+  Configurable vía `.env`: `SCALPING_BE_PIPS_STAGE_5=25.0`.
+  Ejemplo EURUSD (TP≈24 pips): Stage 5 a 25 pips ≈ 104% de TP → lock 85% (casi nunca activo,
+  solo si el precio supera el TP durante un spike).
+  Ejemplo BTCUSD (TP≈120 pips): Stage 5 a 25 pips = 21% del TP → protección temprana.
+- **[Agente: GitHub Copilot]**
+
+---
+
+## [2026-04-04] - FASE D: Multi-Timeframe — H1 Bias Filter para Scalping
+
+### ANÁLISIS MULTI-TIMEFRAME
+
+El bot usaba TF_ENTRY=M1 (entradas) + TF_TREND=M15 (tendencia) + S/R de H1 (zonas).
+Pero no había un "sesgo H1" como filtro de calidad de dirección. Esto significa que un
+scalp BUY en M1 + M15 ALCISTA podría ejecutarse aunque H1 estuviera en tendencia BAJISTA.
+Los scalps contra H1 tienen menor probabilidad de éxito porque van contra la fuerza mayor.
+
+**Solución FASE D**: Añadir H1 bias (DEMA 21/55 en velas H1) como score modifier en
+el motor de decisión, sin bloquear — solo penaliza counter-trend y premia with-trend.
+
+### config.py
+- **`H1_BIAS_ENABLED = True`** *(nuevo)*: activa el filtro de sesgo H1.
+  Configurable vía `.env`: `H1_BIAS_ENABLED=false` para desactivarlo.
+  Documenta que TF_TREND=M15 es la tendencia operativa, H1 es el contexto macro.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **`_get_h1_bias(symbol)`** *(nuevo)*: calcula sesgo H1 usando cruce DEMA(21/55).
+  Cache de 10 min (`_h1_bias_cache`) para no saturar MT5. Retorna "ALCISTA"/"BAJISTA"/"LATERAL".
+  Usa `get_candles(symbol, "H1", 80)` — 80 velas H1 = ~3.3 días de historia.
+- **`_process_symbol()`**: cuando `H1_BIAS_ENABLED=True`, llama `_get_h1_bias()` y
+  almacena `ind["h1_bias"]` y `_symbol_state[symbol]["h1_bias"]` para que el motor
+  determinístico pueda acceder al sesgo H1. No bloquea — solo enriquece el contexto.
+- **[Agente: GitHub Copilot]**
+
+### modules/decision_engine.py
+- **`deterministic_decision()`** — FASE D H1 bias scoring:
+  - BUY con H1="BAJISTA" → `score -= 1.0` (counter-trend penalty)
+  - SELL con H1="ALCISTA" → `score -= 1.0` (counter-trend penalty)
+  - BUY con H1="ALCISTA" → `score += 0.5` (with-trend bonus)
+  - SELL con H1="BAJISTA" → `score += 0.5` (with-trend bonus)
+  Efecto práctico con `min_decision_score=5.0`: un counter-trend scalp necesita
+  5.0 + 1.0 = 6.0 puntos de las otras señales para ejecutarse — filtra setups débiles.
+- **[Agente: GitHub Copilot]**
+
+---
+
+
 
 ### modules/data_providers.py *(nuevo)*
 - **`TwelveDataProvider`**: cliente REST para Twelve Data API — datos OHLCV en tiempo real de índices (US500m, NAS100m, GER40m) y forex donde MT5 no da volumen real. Métodos: `get_realtime_ohlcv()`, `get_quote()`. Cache en memoria con TTL de 5 min. Rate limiting: 8 calls/min (free tier 800/día). API key desde `.env`: `TWELVE_DATA_KEY`. Fallback silencioso si falla o key no configurada.

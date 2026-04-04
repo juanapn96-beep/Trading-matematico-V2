@@ -193,10 +193,49 @@ shared_news_last_update: float = 0.0
 # ── Per-symbol state for deterministic decision engine ───────────
 _symbol_state: dict = {}  # {symbol: {mem_direction, last_indicators, last_sr_context, last_news_context, hurst_penalty}}
 
-# ── H1 indicator cache (H1 candle changes at most once per hour) ─
-_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float, "h1_candle_time": object}}
-H1_CACHE_TTL_SEC = 300    # 5 minutes
+# ── M15 indicator cache (TF_TREND candle — refrescado cada 5 min) ─
+_h1_cache: dict = {}      # {symbol: {"indicators": dict, "timestamp": float}}
+H1_CACHE_TTL_SEC = 300    # 5 minutos — refreshed even within same candle for low-latency
 
+# ── FASE-D: H1 bias cache (tendencia H1 DEMA para filtrar contra-tendencia) ─
+_h1_bias_cache: dict = {}  # {symbol: {"bias": "ALCISTA"|"BAJISTA"|"LATERAL", "ts": float}}
+H1_BIAS_CACHE_TTL_SEC = 600  # 10 min — H1 velas cambian lentamente
+
+# Buffer para cruce DEMA H1 — 0.005% (= 0.00005) para evitar ruido cuando
+# DEMA fast ≈ DEMA slow. Por debajo de este umbral la diferencia < 1 spread típico.
+_H1_BIAS_CROSSOVER_TOL = 0.00005
+
+
+def _get_h1_bias(symbol: str) -> str:
+    """
+    FASE-D: Calcula el sesgo H1 usando cruce DEMA(21/55) en velas H1.
+    Retorna: 'ALCISTA' | 'BAJISTA' | 'LATERAL'
+    Cache de 10 min para no saturar MT5 con peticiones H1.
+    """
+    now_ts = time.time()
+    cached = _h1_bias_cache.get(symbol, {})
+    if cached and (now_ts - cached.get("ts", 0)) < H1_BIAS_CACHE_TTL_SEC:
+        return str(cached.get("bias", "LATERAL"))
+
+    df_h1b = get_candles(symbol, "H1", 80)
+    if df_h1b is None or len(df_h1b) < 56:
+        return "LATERAL"
+
+    close = df_h1b["close"]
+    ema21 = close.ewm(span=21, adjust=False).mean()
+    dema_fast = (2 * ema21 - ema21.ewm(span=21, adjust=False).mean()).iloc[-1]
+    ema55 = close.ewm(span=55, adjust=False).mean()
+    dema_slow = (2 * ema55 - ema55.ewm(span=55, adjust=False).mean()).iloc[-1]
+
+    if dema_fast > dema_slow * (1 + _H1_BIAS_CROSSOVER_TOL):
+        bias = "ALCISTA"
+    elif dema_fast < dema_slow * (1 - _H1_BIAS_CROSSOVER_TOL):
+        bias = "BAJISTA"
+    else:
+        bias = "LATERAL"
+
+    _h1_bias_cache[symbol] = {"bias": bias, "ts": now_ts}
+    return bias
 
 def _set_symbol_status(symbol: str, status: str):
     global symbol_status_cache
@@ -523,6 +562,23 @@ def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> O
     if tick is None:
         return None
     price = tick.ask if action == "BUY" else tick.bid
+
+    # FASE-A FIX: en modo scalping usar el mismo cálculo ATR-entry que _execute_decision
+    # para que el gate check y la ejecución sean coherentes.
+    if bool(getattr(cfg, "SCALPING_ONLY", False)):
+        atr_entry = float(ind.get("atr_entry", ind.get("atr", 0)) or 0)
+        if atr_entry > 0:
+            scalp_sl_mult = float(getattr(cfg, "SCALPING_SL_ATR_MULT", 3.0))
+            scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_ATR_MULT", 6.0))
+            if action == "BUY":
+                sl = round(price - scalp_sl_mult * atr_entry, 5)
+                tp = round(price + scalp_tp_mult * atr_entry, 5)
+            else:
+                sl = round(price + scalp_sl_mult * atr_entry, 5)
+                tp = round(price - scalp_tp_mult * atr_entry, 5)
+            rr = get_rr(price, sl, tp)
+            return {"action": action, "price": price, "sl": sl, "tp": tp, "rr": rr}
+
     sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
     rr = get_rr(price, sl, tp)
     return {
@@ -593,6 +649,10 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
     ])
 
     if strategy_type in {"VOLATILITY_CYCLE", "CYCLE_REVERSION", "GOLD_BETA_REVERSION", "CRYPTO_WAVE"}:
+        # FASE-B sniper: estas estrategias se basan en reversiones de ciclo.
+        # El ideal de entrada es Hilbert en extremo (LOCAL_MIN para BUY, LOCAL_MAX para SELL)
+        # o Fisher extremo con S/R fuerte. Sin confirmación de ciclo ni zona, la entrada
+        # no es sniper — se requiere al menos una condición de confirmación de ciclo.
         if action == "BUY":
             if hilbert_signal == "LOCAL_MAX":
                 return False, f"{strategy_type}: Hilbert en techo"
@@ -600,6 +660,14 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
                 return False, f"{strategy_type}: RSI demasiado alto sin S/R fuerte"
             if fisher > 2.5 and not in_strong_zone:
                 return False, f"{strategy_type}: Fisher extremo contrario"
+            # FASE-B: gate sniper de ciclo — al menos una condición de ciclo/zona activa
+            cycle_buy_ok = (
+                hilbert_signal == "LOCAL_MIN"
+                or (fisher < -2.0)
+                or in_strong_zone
+            )
+            if not cycle_buy_ok:
+                return False, f"{strategy_type}: sin confirmación de ciclo para BUY sniper (Hilbert={hilbert_signal}, Fisher={fisher:.1f})"
         else:
             if hilbert_signal == "LOCAL_MIN":
                 return False, f"{strategy_type}: Hilbert en suelo"
@@ -607,13 +675,21 @@ def _evaluate_strategy_specific_gate(action: str, ind: dict, sr_ctx, sym_cfg: di
                 return False, f"{strategy_type}: RSI demasiado bajo sin S/R fuerte"
             if fisher < -2.5 and not in_strong_zone:
                 return False, f"{strategy_type}: Fisher extremo contrario"
+            # FASE-B: gate sniper de ciclo — al menos una condición de ciclo/zona activa
+            cycle_sell_ok = (
+                hilbert_signal == "LOCAL_MAX"
+                or (fisher > 2.0)
+                or in_strong_zone
+            )
+            if not cycle_sell_ok:
+                return False, f"{strategy_type}: sin confirmación de ciclo para SELL sniper (Hilbert={hilbert_signal}, Fisher={fisher:.1f})"
         return True, ""
 
     if strategy_type in {"MOMENTUM_TREND", "MOMENTUM_SURGE", "TECH_MOMENTUM", "FRANKFURT_BREAKOUT", "RANGE_BREAKOUT_OIL"}:
         primaries = bullish_primaries if action == "BUY" else bearish_primaries
         if primaries < 3:
             return False, f"{strategy_type}: primarios alineados insuficientes ({primaries}/4)"
-        if abs(conf_total) < float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.3)) * 1.2:
+        if abs(conf_total) < float(getattr(cfg, "CONFLUENCE_MIN_SCORE", 0.5)) * 1.2:
             return False, f"{strategy_type}: confluencia insuficiente ({conf_total:+.2f})"
         return True, ""
 
@@ -640,20 +716,9 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     if plan is None:
         return False, "⚠️ Tick no disponible", None
 
-    # FIX v7.0: Aplicar SCALPING_TP_MULT ANTES del R:R check para ser coherente
-    # con _execute_decision (que aplica el mismo mult al abrir la orden).
-    # Sin esta corrección, Groq era consultado en setups SELL con R:R=1.20 base,
-    # pero al ejecutar el mult 0.82 el R:R caía a ~0.98 → rechazado post-Groq.
-    # Desperdicio de llamadas API + sesgo BUY (BUY sobrevivía, SELL no).
-    if bool(getattr(cfg, "SCALPING_ONLY", False)):
-        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.98) or 0.98)
-        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
-        price = plan["price"]
-        if action == "BUY":
-            plan["tp"] = round(price + ((plan["tp"] - price) * scalp_tp_mult), 5)
-        else:
-            plan["tp"] = round(price - ((price - plan["tp"]) * scalp_tp_mult), 5)
-        plan["rr"] = get_rr(price, plan["sl"], plan["tp"])
+    # FASE-A: _compute_trade_plan ya usa el cálculo ATR-entry correcto en modo
+    # SCALPING_ONLY, por lo que no se necesita aplicar SCALPING_TP_MULT aquí.
+    # El gate y la ejecución son ahora coherentes (mismo SL/TP).
 
     min_rr = _get_entry_min_rr(sym_cfg)
     if not is_rr_valid(plan["price"], plan["sl"], plan["tp"], min_rr=min_rr):
@@ -1586,9 +1651,12 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
     tp        = float(pos.get("tp", 0.0) or 0.0)
 
     # Obtener ATR del cache de indicadores
+    # FASE-C: preferir atr_entry (M1) en scalp mode, fallback a atr (M15)
     ind     = ind_cache.get(symbol, {})
-    atr_val = ind.get("atr", 0)
+    atr_val = float(ind.get("atr_entry", ind.get("atr", 0)) or 0)
 
+    if atr_val <= 0:
+        atr_val = float(ind.get("atr", 0) or 0)
     if atr_val <= 0:
         return  # Sin ATR disponible, no actuar
 
@@ -1646,11 +1714,16 @@ def _manage_trailing_stop(pos: dict, sym_cfg: dict):
 
     if scalp_mode:
         # gained_pips ya está calculado en el gate anterior
+        # FASE-C: Stage 5 añadido para protección final cerca del TP.
+        # stage_num es el nivel de protección interno (ratchet). Los stages van del 2
+        # (primer BE) al 6 (Stage 5 — máximo lock 85%). No puede bajar una vez activado.
+        # La numeración interna es: Stage1=num2, Stage2=num3, Stage3=num4, Stage4=num5, Stage5=num6.
         stage_definitions = [
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3, "Scalp lock 30%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2, "Scalp lock 15%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_5", 25.0)), 0.85, 6, "Scalp lock 85%"),  # Stage 5
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")),       0.70, 5, "Scalp lock 70%"),  # Stage 4
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")),       0.50, 4, "Scalp lock 50%"),  # Stage 3
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")),       0.30, 3, "Scalp lock 30%"),  # Stage 2
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")),       0.15, 2, "Scalp lock 15%"),  # Stage 1
         ]
         lock_pct = 0.0
         new_stage = 1
@@ -2387,6 +2460,15 @@ def _process_symbol(
         log.info(f"[{symbol}] Hurst {hurst_val:.3f} < {min_hurst:.3f} pero se permite scalp â€” {hurst_reason}")
         _set_symbol_status(symbol, f"ðŸ“‰ Hurst scalp OK {hurst_val:.2f}")
 
+
+    # FASE-D: H1 bias — propagar sesgo H1 a indicadores para motor determinístico
+    if bool(getattr(cfg, "H1_BIAS_ENABLED", True)):
+        h1_bias = _get_h1_bias(symbol)
+        ind["h1_bias"] = h1_bias
+        _symbol_state[symbol]["h1_bias"] = h1_bias
+        log.debug(f"[{symbol}] H1 bias: {h1_bias}")
+    else:
+        ind["h1_bias"] = "LATERAL"
     h1_trend = ind.get("h1_trend", "LATERAL")
     candle_stamp = _get_last_candle_stamp(df_entry)
     if h1_trend in ("BAJISTA_FUERTE", "BAJISTA"):
