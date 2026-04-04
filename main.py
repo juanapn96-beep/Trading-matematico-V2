@@ -523,6 +523,23 @@ def _compute_trade_plan(symbol: str, action: str, ind: dict, sym_cfg: dict) -> O
     if tick is None:
         return None
     price = tick.ask if action == "BUY" else tick.bid
+
+    # FASE-A FIX: en modo scalping usar el mismo cálculo ATR-entry que _execute_decision
+    # para que el gate check y la ejecución sean coherentes.
+    if bool(getattr(cfg, "SCALPING_ONLY", False)):
+        atr_entry = float(ind.get("atr_entry", ind.get("atr", 0)) or 0)
+        if atr_entry > 0:
+            scalp_sl_mult = float(getattr(cfg, "SCALPING_SL_ATR_MULT", 3.0))
+            scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_ATR_MULT", 6.0))
+            if action == "BUY":
+                sl = round(price - scalp_sl_mult * atr_entry, 5)
+                tp = round(price + scalp_tp_mult * atr_entry, 5)
+            else:
+                sl = round(price + scalp_sl_mult * atr_entry, 5)
+                tp = round(price - scalp_tp_mult * atr_entry, 5)
+            rr = get_rr(price, sl, tp)
+            return {"action": action, "price": price, "sl": sl, "tp": tp, "rr": rr}
+
     sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
     rr = get_rr(price, sl, tp)
     return {
@@ -640,20 +657,9 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     if plan is None:
         return False, "⚠️ Tick no disponible", None
 
-    # FIX v7.0: Aplicar SCALPING_TP_MULT ANTES del R:R check para ser coherente
-    # con _execute_decision (que aplica el mismo mult al abrir la orden).
-    # Sin esta corrección, Groq era consultado en setups SELL con R:R=1.20 base,
-    # pero al ejecutar el mult 0.82 el R:R caía a ~0.98 → rechazado post-Groq.
-    # Desperdicio de llamadas API + sesgo BUY (BUY sobrevivía, SELL no).
-    if bool(getattr(cfg, "SCALPING_ONLY", False)):
-        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.98) or 0.98)
-        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
-        price = plan["price"]
-        if action == "BUY":
-            plan["tp"] = round(price + ((plan["tp"] - price) * scalp_tp_mult), 5)
-        else:
-            plan["tp"] = round(price - ((price - plan["tp"]) * scalp_tp_mult), 5)
-        plan["rr"] = get_rr(price, plan["sl"], plan["tp"])
+    # FASE-A: _compute_trade_plan ya usa el cálculo ATR-entry correcto en modo
+    # SCALPING_ONLY, por lo que no se necesita aplicar SCALPING_TP_MULT aquí.
+    # El gate y la ejecución son ahora coherentes (mismo SL/TP).
 
     min_rr = _get_entry_min_rr(sym_cfg)
     if not is_rr_valid(plan["price"], plan["sl"], plan["tp"], min_rr=min_rr):

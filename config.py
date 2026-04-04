@@ -112,8 +112,7 @@ for _extra_groq_key in _split_env_csv("GROQ_API_KEYS"):
 GROQ_MODEL     = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_MAX_CALLS_PER_HOUR = int(os.environ.get("GROQ_MAX_CALLS_PER_HOUR", "0") or 0)
 GROQ_MAX_CALLS_PER_DAY  = int(os.environ.get("GROQ_MAX_CALLS_PER_DAY",  "0") or 0)
-GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "300") or 300)
-GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "2") or 2)
+# FIX FASE-A: valores únicos para scalping — cooldown corto + calidad estricta
 GROQ_SYMBOL_COOLDOWN_SEC = int(os.environ.get("GROQ_SYMBOL_COOLDOWN_SEC", "120") or 120)
 GROQ_MIN_ENTRY_QUALITY   = int(os.environ.get("GROQ_MIN_ENTRY_QUALITY", "3") or 3)
 GROQ_ENTRY_STRONG_ONLY   = _env_flag("GROQ_ENTRY_STRONG_ONLY", True)
@@ -145,18 +144,12 @@ SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.
 # Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
 # Esto evita trades de $0.50 que no justifican el riesgo ni el spread.
 MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "5.0") or 5.0)
-SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.82") or 0.82)
 # ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
-# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
+# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1) en vez de ATR M15/H1
 # para calcular SL y TP. Esto hace que los stops sean proporcionales al
 # movimiento real del timeframe en que se opera.
 SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
 SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
-SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1", "8.0") or 8.0)
-SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2", "12.0") or 12.0)
-SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "18.0") or 18.0)
-SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "25.0") or 25.0)
-SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",     "5.0") or 5.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
 
 # ================================================================

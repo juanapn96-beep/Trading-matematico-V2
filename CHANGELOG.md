@@ -4,6 +4,59 @@ Registro de cambios del proyecto. Formato: `[Fecha Hora UTC] - [Módulo/Archivo]
 
 ---
 
+## [2026-04-04] - FASE A: Análisis + Corrección de Bugs Críticos en config.py y main.py
+
+### ANÁLISIS HONESTO DEL BOT (estado previo a esta fase)
+
+El bot tiene una arquitectura sólida con 3 pilares (estadístico, matemático, microestructura),
+trailing stop por progreso de TP, Kelly sizing, policy engine, scorecard jerárquico,
+5 símbolos de alta liquidez y modo scalping M1. Sin embargo, se detectaron 5 bugs críticos
+que silenciosamente anulaban los fixes documentados en v7.0:
+
+**BUGS ENCONTRADOS (todos en config.py / main.py):**
+
+1. **`SCALPING_TP_MULT` definido dos veces** — El comentario dice "FIX v7.0: 0.82→0.98"
+   pero líneas más abajo se redefinía a 0.82. Python usa la última definición → el TP
+   efectivo era 0.82 (valor pre-fix). Causa directa de que los SELL se rechazaran en el
+   gate check por R:R insuficiente.
+
+2. **`SCALPING_BE_PIPS_STAGE_1/2/3/4` definidos dos veces** — Valores v7.0 (5/8/12/18 pips)
+   sobrescritos por valores mayores (8/12/18/25 pips). El trailing se activaba demasiado
+   tarde, acumulando menos ganancias.
+
+3. **`GROQ_SYMBOL_COOLDOWN_SEC` definido dos veces** — 300s y 120s en líneas consecutivas.
+   Valor efectivo 120s (correcto para scalping), pero la duplicación era fuente de confusión.
+
+4. **`GROQ_MIN_ENTRY_QUALITY` definido dos veces** — 2 y 3 en líneas consecutivas.
+   Valor efectivo 3 (correcto), pero igual generaba confusión.
+
+5. **Inconsistencia gate vs ejecución en scalping** — `_is_groq_candidate_ready` calculaba
+   el TP con la fórmula sym_cfg × SCALPING_TP_MULT (= 0.82) para el gate check, pero
+   `_execute_decision` calculaba con `atr_entry × SCALPING_TP_ATR_MULT (= 6.0)`. Dos
+   fórmulas distintas para el mismo trade → setups válidos eran rechazados en el gate.
+
+### config.py
+- **Bug 1 corregido**: Eliminada la segunda definición de `SCALPING_TP_MULT = 0.82`.
+  Valor efectivo ahora: `0.98` (FIX v7.0 restaurado).
+- **Bug 2 corregido**: Eliminadas las segundas definiciones de `SCALPING_BE_PIPS_STAGE_1/2/3/4`
+  con valores 8/12/18/25. Valores efectivos ahora: `5 / 8 / 12 / 18 pips` (v7.0 restaurados).
+- **Bug 3 corregido**: Eliminada la primera definición de `GROQ_SYMBOL_COOLDOWN_SEC = 300`.
+  Valor único ahora: `120s`.
+- **Bug 4 corregido**: Eliminada la primera definición de `GROQ_MIN_ENTRY_QUALITY = 2`.
+  Valor único ahora: `3`.
+- **[Agente: GitHub Copilot]**
+
+### main.py
+- **Bug 5 corregido — `_compute_trade_plan()`**: en modo `SCALPING_ONLY=True`, la función
+  ahora usa la misma fórmula que `_execute_decision`: `SL = price ± atr_entry × SCALPING_SL_ATR_MULT`
+  y `TP = price ± atr_entry × SCALPING_TP_ATR_MULT`. Esto garantiza que el gate check
+  y la ejecución evalúen exactamente el mismo SL/TP (R:R = 6.0/3.0 = 2.0 fijo).
+- **`_is_groq_candidate_ready()`**: eliminado el bloque que aplicaba `SCALPING_TP_MULT`
+  al plan (ya no es necesario — `_compute_trade_plan` entrega el plan correcto).
+- **[Agente: GitHub Copilot]**
+
+---
+
 ## [2026-03-28] - FASE 11: External Data Providers (Twelve Data, Polygon.io, TrueFX)
 
 ### modules/data_providers.py *(nuevo)*
