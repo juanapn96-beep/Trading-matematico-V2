@@ -627,6 +627,21 @@ def _is_groq_candidate_ready(symbol: str, action: str, ind: dict, sr_ctx, sym_cf
     if plan is None:
         return False, "⚠️ Tick no disponible", None
 
+    # FIX v7.0: Aplicar SCALPING_TP_MULT ANTES del R:R check para ser coherente
+    # con _execute_decision (que aplica el mismo mult al abrir la orden).
+    # Sin esta corrección, Groq era consultado en setups SELL con R:R=1.20 base,
+    # pero al ejecutar el mult 0.82 el R:R caía a ~0.98 → rechazado post-Groq.
+    # Desperdicio de llamadas API + sesgo BUY (BUY sobrevivía, SELL no).
+    if bool(getattr(cfg, "SCALPING_ONLY", False)):
+        scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_MULT", 0.98) or 0.98)
+        scalp_tp_mult = max(0.2, min(1.0, scalp_tp_mult))
+        price = plan["price"]
+        if action == "BUY":
+            plan["tp"] = round(price + ((plan["tp"] - price) * scalp_tp_mult), 5)
+        else:
+            plan["tp"] = round(price - ((price - plan["tp"]) * scalp_tp_mult), 5)
+        plan["rr"] = get_rr(price, plan["sl"], plan["tp"])
+
     min_rr = _get_entry_min_rr(sym_cfg)
     if not is_rr_valid(plan["price"], plan["sl"], plan["tp"], min_rr=min_rr):
         return False, f"⚖️ R:R inválido ({plan['rr']:.2f})", plan
@@ -1697,6 +1712,11 @@ def _passes_direction_filter(action: str, ind: dict) -> tuple:
     - GBPUSDm SELL con kalman=ALCISTA y ha=ALCISTA → contratendencia
 
     Regla: Si Kalman + SuperTrend AMBOS contradicen la dirección → HOLD forzado.
+
+    FIX v7.0 (SCALPING): En modo scalping puro (M1), el filtro de 3/4 contradicciones
+    H1 era demasiado restrictivo — bloqueaba todos los SELL durante sesiones alcistas en H1,
+    aunque el M1 mostrara reversión válida. Se elimina el conteo de 3/4 en scalping:
+    solo aplica el bloqueo duro (Kalman+SuperTrend AMBOS contra la dirección).
     """
     kalman_trend = ind.get("kalman_trend", "NEUTRAL")
     supertrend   = ind.get("supertrend", 0)
@@ -1715,8 +1735,16 @@ def _passes_direction_filter(action: str, ind: dict) -> tuple:
         macd_ok       = macd_dir == "BAJISTA"
 
     # BLOQUEO DURO: Si Kalman Y SuperTrend ambos contradicen → bloquear
+    # Este bloqueo aplica siempre, incluso en scalping.
     if not kalman_ok and not supertrend_ok:
         return False, f"Kalman+SuperTrend contradicen {action} → HOLD forzado"
+
+    # FIX v7.0: En modo scalping, el bloqueo duro (arriba) es suficiente.
+    # No aplicar el conteo de 3/4 indicadores H1 para scalping M1:
+    # en tendencias H1 alcistas, HA y MACD H1 contradicen SELL aunque M1 sea válido,
+    # causando que ~80% de los SELL queden bloqueados injustamente.
+    if bool(getattr(cfg, "SCALPING_ONLY", False)):
+        return True, ""
 
     # Contar indicadores primarios que contradicen
     contradictions = sum([
@@ -2672,6 +2700,27 @@ def _execute_decision(
             f"[warmup] {symbol}: lote reducido {original_vol} → {vol} "
             f"(factor={warmup_factor}, trades={sym_trades})"
         )
+
+    # ── FIX v7.0: GATE de profit mínimo esperado ─────────────────
+    # Verifica que el lot size calculado + TP produzcan al menos
+    # MIN_EXPECTED_PROFIT_USD. Evita trades de $0.50 que no cubren
+    # el spread ni justifican el riesgo en scalping.
+    min_profit_usd = float(getattr(cfg, "MIN_EXPECTED_PROFIT_USD", 5.0))
+    if min_profit_usd > 0 and sym_info is not None:
+        _tick_val = float(getattr(sym_info, "trade_tick_value", 0) or 0)
+        _tick_sz  = float(getattr(sym_info, "trade_tick_size",  0) or 0)
+        if _tick_val > 0 and _tick_sz > 0:
+            _tp_diff = abs(tp - price)
+            _expected_profit = (_tp_diff / _tick_sz) * _tick_val * vol
+            if _expected_profit < min_profit_usd:
+                msg = (
+                    f"💵 Profit esperado ${_expected_profit:.2f} "
+                    f"< ${min_profit_usd:.0f} mín (lote={vol})"
+                )
+                last_action = f"{msg} {symbol}"
+                _set_symbol_status(symbol, f"💵 Profit ${_expected_profit:.2f}<${min_profit_usd:.0f}")
+                log.info(f"[{symbol}] {msg} — HOLD (aumentar balance o lote mínimo)")
+                return
 
     hilbert  = ind.get("hilbert", {})
     h_signal = hilbert.get("signal", "NEUTRAL")
