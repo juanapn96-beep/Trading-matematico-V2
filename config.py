@@ -434,6 +434,15 @@ MEMORY_BLOCK_NOTIFY_COOLDOWN_SEC = int(
     os.environ.get("MEMORY_BLOCK_NOTIFY_COOLDOWN_SEC", "14400")
 )
 
+# ── Exec Quality Monitor (Mejora 13) ─────────────────────────────────────────
+# Monitor activo de calidad de ejecución. Detecta degradación de slippage
+# y puede pausar la operativa automáticamente si la calidad cae.
+EXEC_QUALITY_ENABLED             = _env_flag("EXEC_QUALITY_ENABLED", True)
+EXEC_QUALITY_WINDOW              = int(os.environ.get("EXEC_QUALITY_WINDOW", "20") or 20)
+EXEC_QUALITY_PAUSE_THRESHOLD     = float(os.environ.get("EXEC_QUALITY_PAUSE_THRESHOLD", "30.0") or 30.0)
+EXEC_QUALITY_MIN_SAMPLES         = int(os.environ.get("EXEC_QUALITY_MIN_SAMPLES", "5") or 5)
+EXEC_QUALITY_NOTIFY_COOLDOWN_SEC = int(os.environ.get("EXEC_QUALITY_NOTIFY_COOLDOWN_SEC", "3600") or 3600)
+
 # ── Circuit Breaker individual de posición (Cisne Negro) ─────────
 # Si el drawdown de una posición abierta supera este % del balance,
 # se ejecuta un cierre forzado de emergencia independiente del SL/TP.

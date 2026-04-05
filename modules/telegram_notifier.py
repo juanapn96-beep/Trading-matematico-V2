@@ -520,3 +520,31 @@ def notify_shadow_trade_closed(
         f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
     ]
     _send("\n".join(lines))
+
+
+# ════════════════════════════════════════════════════════════════
+#  EXEC QUALITY MONITOR (Mejora 13)
+# ════════════════════════════════════════════════════════════════
+
+def notify_exec_quality_degraded(symbol: str, quality_data: dict) -> None:
+    """Notifica degradación de calidad de ejecución para un símbolo."""
+    icon         = _icon(symbol)
+    score        = quality_data.get("quality_score", 0)
+    status       = quality_data.get("status", "critical")
+    avg_slip     = quality_data.get("avg_slippage_pips", 0.0)
+    p95_slip     = quality_data.get("p95_slippage_pips", 0.0)
+    exc_ratio    = quality_data.get("excessive_ratio", 0.0)
+    sample_count = quality_data.get("sample_count", 0)
+    _send("\n".join([
+        "⚠️ <b>CALIDAD DE EJECUCIÓN DEGRADADA</b>",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"{icon} Símbolo:        <code>{_esc(symbol)}</code>",
+        f"📊 Score:         <code>{score:.1f}/100</code> ({_esc(status)})",
+        f"📉 Avg Slippage:  <code>{avg_slip:.2f} pips</code>",
+        f"📈 P95 Slippage:  <code>{p95_slip:.2f} pips</code>",
+        f"⚡ Ratio excesivo: <code>{exc_ratio:.0%}</code>",
+        f"🔢 Muestras:      <code>{sample_count}</code>",
+        "",
+        "🛑 Operativa <b>PAUSADA</b> hasta que mejore la ejecución.",
+        f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+    ]))

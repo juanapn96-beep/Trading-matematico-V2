@@ -51,6 +51,21 @@ from modules.news_engine import (
 )
 from modules.economic_calendar import calendar as eco_calendar
 
+try:
+    from modules.exec_quality_monitor import (
+        record_execution,
+        should_pause_for_exec_quality,
+        get_exec_quality,
+        get_last_pause_notify_ts,
+        set_last_pause_notify_ts,
+    )
+except ImportError:
+    def record_execution(*a, **kw): pass
+    def should_pause_for_exec_quality(*a, **kw): return False
+    def get_exec_quality(*a, **kw): return {}
+    def get_last_pause_notify_ts(*a, **kw): return 0.0
+    def set_last_pause_notify_ts(*a, **kw): pass
+
 log = logging.getLogger(__name__)
 
 # ── Module-level constants ───────────────────────────────────────
@@ -798,6 +813,27 @@ def _execute_decision(
         )
         return  # No ejecutar orden real
 
+    # ── Exec Quality check (Mejora 13) ───────────────────────────
+    if getattr(cfg, "EXEC_QUALITY_ENABLED", True) and should_pause_for_exec_quality(symbol):
+        quality_info = get_exec_quality(symbol)
+        cooldown_sec = int(getattr(cfg, "EXEC_QUALITY_NOTIFY_COOLDOWN_SEC", 3600))
+        now_ts       = time.time()
+        if now_ts - get_last_pause_notify_ts(symbol) >= cooldown_sec:
+            try:
+                from modules.telegram_notifier import notify_exec_quality_degraded
+                notify_exec_quality_degraded(symbol, quality_info)
+            except Exception as _exc:
+                log.warning(f"[exec_quality] Error enviando alerta Telegram: {_exc}")
+            set_last_pause_notify_ts(symbol)
+        msg = (
+            f"⚡ Exec Quality degradada {symbol} "
+            f"(score={quality_info.get('quality_score', 0):.1f})"
+        )
+        log.warning(f"[{symbol}] {msg} — HOLD por calidad de ejecución")
+        state.last_action = f"{msg} — HOLD"
+        set_symbol_status(symbol, msg[:48])
+        return
+
     ticket, executed_price = open_order(symbol, action, sl, tp, vol)
     if ticket is None:
         state.last_action = f"❌ Orden fallida {symbol}"
@@ -840,6 +876,18 @@ def _execute_decision(
         slippage_pips=slippage_pips,
     )
     state.tickets_en_memoria.add(ticket)
+
+    # ── Alimentar Exec Quality Monitor (Mejora 13) ───────────────
+    if getattr(cfg, "EXEC_QUALITY_ENABLED", True):
+        try:
+            record_execution(
+                symbol=symbol, ticket=ticket,
+                slippage_pips=slippage_pips,
+                expected_price=price,
+                fill_price=executed_price,
+            )
+        except Exception as _exc:
+            log.warning(f"[exec_quality] Error al registrar ejecución: {_exc}")
 
     notify_trade_opened(
         symbol=symbol, direction=action, price=price, sl=sl, tp=tp,

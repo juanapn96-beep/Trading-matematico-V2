@@ -1810,11 +1810,11 @@ def get_pending_trades() -> list:
     con = sqlite3.connect(DB_PATH)
     cur = con.cursor()
     rows = cur.execute(
-        "SELECT ticket, symbol, direction, open_price, opened_at FROM trades WHERE result IS NULL"
+        "SELECT ticket, symbol, direction, open_price, opened_at, slippage_pips FROM trades WHERE result IS NULL"
     ).fetchall()
     con.close()
     return [{"ticket": r[0], "symbol": r[1], "direction": r[2],
-             "open_price": r[3], "opened_at": r[4]} for r in rows]
+             "open_price": r[3], "opened_at": r[4], "slippage_pips": r[5]} for r in rows]
 
 
 def get_learning_report() -> str:

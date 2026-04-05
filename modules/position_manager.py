@@ -24,6 +24,11 @@ from modules.telegram_notifier import (
     notify_near_tp, notify_trade_closed,
 )
 
+try:
+    from modules.exec_quality_monitor import record_execution as _record_exec_quality
+except ImportError:
+    def _record_exec_quality(*a, **kw): pass
+
 log = logging.getLogger(__name__)
 
 # ── Module-level state ───────────────────────────────────────────
@@ -329,6 +334,18 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
             profit=profit, pips=pips,
             result=result, duration_min=duration_min,
         )
+
+        # ── Alimentar Exec Quality Monitor (Mejora 13) ───────────
+        if getattr(cfg, "EXEC_QUALITY_ENABLED", True):
+            try:
+                slip_pips = float(
+                    (trade_info.get("slippage_pips") if trade_info else None) or 0.0
+                )
+                _record_exec_quality(
+                    symbol=symbol, ticket=ticket, slippage_pips=slip_pips,
+                )
+            except Exception as _exc:
+                log.warning(f"[exec_quality] Error al registrar cierre: {_exc}")
 
         # FIX 13: actualizar contadores — BE NO cuenta en WR
         state.daily_pnl += profit
