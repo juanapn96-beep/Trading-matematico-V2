@@ -692,3 +692,20 @@ HURST_GREY_ZONE_LOW      = 0.42    # Límite inferior de zona gris de Hurst
 HURST_GREY_ZONE_HIGH     = 0.58    # Límite superior de zona gris de Hurst
 RANDOM_WALK_PENALTY      = 0.70    # Factor de penalización en confluencia para random walk
 ZSCORE_CONFLUENCE_BONUS  = 0.5     # Bonus máximo al score por Z-score alignment
+
+# ════════════════════════════════════════════════════════════════
+#  PARTIAL TAKE PROFIT
+# ════════════════════════════════════════════════════════════════
+# Cuando el trade alcanza PARTIAL_TP_TRIGGER_PCT del recorrido hacia TP,
+# se cierra PARTIAL_TP_CLOSE_PCT del volumen y se mueve SL a breakeven.
+PARTIAL_TP_ENABLED       = _env_flag("PARTIAL_TP_ENABLED", True)
+PARTIAL_TP_TRIGGER_PCT   = float(os.environ.get("PARTIAL_TP_TRIGGER_PCT", "0.50") or 0.50)   # 50% del camino a TP
+PARTIAL_TP_CLOSE_PCT     = float(os.environ.get("PARTIAL_TP_CLOSE_PCT", "0.50") or 0.50)     # Cerrar 50% del lote
+PARTIAL_TP_MIN_VOLUME    = float(os.environ.get("PARTIAL_TP_MIN_VOLUME", "0.01") or 0.01)    # Volumen mínimo para parcial
+
+# ════════════════════════════════════════════════════════════════
+#  ROLLING CORRELATION GUARD
+# ════════════════════════════════════════════════════════════════
+ROLLING_CORR_ENABLED     = _env_flag("ROLLING_CORR_ENABLED", True)
+ROLLING_CORR_WINDOW      = int(os.environ.get("ROLLING_CORR_WINDOW", "20") or 20)
+ROLLING_CORR_TTL_SEC     = int(os.environ.get("ROLLING_CORR_TTL_SEC", "300") or 300)

@@ -1815,3 +1815,120 @@ def get_learning_report() -> str:
         f"Avg Reward: {stats['avg_reward']:+.3f}\n"
         f"🤖 Modelos: {models_str}"
     )
+
+
+def get_advanced_metrics() -> dict:
+    """
+    Advanced metrics for the dashboard: WR by session, slippage stats,
+    avg trade duration, and score analysis for winners vs losers.
+    """
+    con = sqlite3.connect(DB_PATH)
+    cur = con.cursor()
+
+    result = {
+        "wr_by_session": [],
+        "slippage_by_symbol": [],
+        "avg_duration_min": 0,
+        "avg_duration_winners": 0,
+        "avg_duration_losers": 0,
+        "score_winners_avg": 0,
+        "score_losers_avg": 0,
+    }
+
+    try:
+        # WR by session (based on opened_at hour)
+        rows = cur.execute("""
+            SELECT
+                CASE
+                    WHEN CAST(strftime('%H', opened_at) AS INTEGER) BETWEEN 0 AND 6 THEN 'Asian'
+                    WHEN CAST(strftime('%H', opened_at) AS INTEGER) BETWEEN 7 AND 12 THEN 'London'
+                    WHEN CAST(strftime('%H', opened_at) AS INTEGER) BETWEEN 13 AND 20 THEN 'New York'
+                    ELSE 'Dead Zone'
+                END as session,
+                COUNT(*) as total,
+                SUM(CASE WHEN result = 'WIN' THEN 1 ELSE 0 END) as wins,
+                SUM(CASE WHEN result = 'LOSS' THEN 1 ELSE 0 END) as losses,
+                AVG(profit) as avg_profit
+            FROM trades
+            WHERE result IS NOT NULL AND opened_at IS NOT NULL
+            GROUP BY session
+            ORDER BY
+                CASE session
+                    WHEN 'Asian' THEN 1
+                    WHEN 'London' THEN 2
+                    WHEN 'New York' THEN 3
+                    ELSE 4
+                END
+        """).fetchall()
+
+        for r in rows:
+            session, total, wins, losses, avg_profit = r
+            wr = round(wins / max(1, wins + losses) * 100, 1)
+            result["wr_by_session"].append({
+                "session":    session,
+                "total":      total,
+                "wins":       wins,
+                "losses":     losses,
+                "wr":         wr,
+                "avg_profit": round(avg_profit or 0, 2),
+            })
+
+        # Slippage by symbol (uses slippage_pips column if available)
+        try:
+            rows = cur.execute("""
+                SELECT symbol,
+                       COUNT(*) as total,
+                       AVG(slippage_pips) as avg_slip,
+                       MAX(slippage_pips) as max_slip
+                FROM trades
+                WHERE result IS NOT NULL AND slippage_pips IS NOT NULL AND slippage_pips > 0
+                GROUP BY symbol
+                ORDER BY avg_slip DESC
+            """).fetchall()
+
+            for r in rows:
+                symbol, total, avg_slip, max_slip = r
+                result["slippage_by_symbol"].append({
+                    "symbol":               symbol or "",
+                    "total":                total,
+                    "avg_slippage_pips":    round(avg_slip or 0, 2),
+                    "max_slippage_pips":    round(max_slip or 0, 2),
+                })
+        except Exception:
+            pass  # Column may not exist in older databases
+
+        # Average duration
+        row = cur.execute("""
+            SELECT AVG(duration_min),
+                   AVG(CASE WHEN result = 'WIN' THEN duration_min END),
+                   AVG(CASE WHEN result = 'LOSS' THEN duration_min END)
+            FROM trades
+            WHERE result IS NOT NULL AND duration_min IS NOT NULL
+        """).fetchone()
+
+        if row:
+            result["avg_duration_min"]      = round(row[0] or 0, 1)
+            result["avg_duration_winners"]  = round(row[1] or 0, 1)
+            result["avg_duration_losers"]   = round(row[2] or 0, 1)
+
+        # Score analysis: winners vs losers (uses setup_score column if available)
+        try:
+            row = cur.execute("""
+                SELECT AVG(CASE WHEN result = 'WIN' THEN setup_score END),
+                       AVG(CASE WHEN result = 'LOSS' THEN setup_score END)
+                FROM trades
+                WHERE result IS NOT NULL AND setup_score IS NOT NULL
+            """).fetchone()
+
+            if row:
+                result["score_winners_avg"] = round(row[0] or 0, 2)
+                result["score_losers_avg"]  = round(row[1] or 0, 2)
+        except Exception:
+            pass  # Column may not exist in older databases
+
+    except Exception as e:
+        log.warning(f"[memory] Error getting advanced metrics: {e}")
+    finally:
+        con.close()
+
+    return result
