@@ -733,3 +733,25 @@ PARTIAL_TP_MIN_VOLUME    = float(os.environ.get("PARTIAL_TP_MIN_VOLUME", "0.01")
 ROLLING_CORR_ENABLED     = _env_flag("ROLLING_CORR_ENABLED", True)
 ROLLING_CORR_WINDOW      = int(os.environ.get("ROLLING_CORR_WINDOW", "20") or 20)
 ROLLING_CORR_TTL_SEC     = int(os.environ.get("ROLLING_CORR_TTL_SEC", "300") or 300)
+
+# ================================================================
+#  MEJORA 12 — MTF CONFIRMATION (Multi-Timeframe)
+# ================================================================
+# Antes de abrir un trade, verifica que el timeframe superior (H1)
+# confirme la misma dirección que la señal de entrada (M1/M15).
+MTF_ENABLED            = _env_flag("MTF_ENABLED", True)
+MTF_HIGHER_TF          = os.environ.get("MTF_HIGHER_TF", "H1")           # Timeframe superior para confirmar
+MTF_CANDLES            = int(os.environ.get("MTF_CANDLES", "100") or 100) # Velas a pedir del TF superior
+MTF_REQUIRE_AGREEMENT  = _env_flag("MTF_REQUIRE_AGREEMENT", True)         # Si True, bloquea trades sin confirmación HTF
+MTF_PENALTY_SCORE      = float(os.environ.get("MTF_PENALTY_SCORE", "2.0") or 2.0)  # Penalización al score en modo soft
+MTF_CACHE_TTL_SEC      = int(os.environ.get("MTF_CACHE_TTL_SEC", "300") or 300)    # TTL del cache HTF (5 min)
+
+# ================================================================
+#  MEJORA 15 — SHADOW MODE (Paper Trading)
+# ================================================================
+# Cuando está activo, el bot ejecuta toda la lógica normalmente
+# pero NO envía órdenes reales a MT5. Registra trades virtuales
+# en una tabla SQLite separada para análisis posterior.
+SHADOW_MODE_ENABLED    = _env_flag("SHADOW_MODE_ENABLED", False)
+SHADOW_NOTIFY_TELEGRAM = _env_flag("SHADOW_NOTIFY_TELEGRAM", True)  # Enviar notificaciones shadow a Telegram
+SHADOW_LOG_PREFIX      = "👻"  # Prefijo visual para logs shadow

@@ -476,6 +476,18 @@ def run():
         f"Trail: proporcional por TP progress | Web: http://{web_host}:{web_port}"
     )
 
+    # ── Shadow Mode: banner de advertencia prominente ─────────────
+    if getattr(cfg, "SHADOW_MODE_ENABLED", False):
+        log.warning("👻👻👻 SHADOW MODE ACTIVO — NO se ejecutarán órdenes reales 👻👻👻")
+        from modules.shadow_tracker import load_open_from_db
+        load_open_from_db()
+        from modules.telegram_notifier import telegram_send
+        telegram_send(
+            "👻👻👻 <b>SHADOW MODE ACTIVO</b>\n"
+            "El bot está corriendo en modo simulación.\n"
+            "<i>NO se ejecutarán órdenes reales.</i> 👻👻👻"
+        )
+
     for pending in get_pending_trades():
         state.tickets_en_memoria.add(pending["ticket"])
 
@@ -522,6 +534,17 @@ def run():
                     state.ind_cache[symbol] = compute_all(df_h1, symbol, sym_cfg_data, df_entry=df_entry)
 
                 manage_positions(open_positions, state.ind_cache)
+
+                # ── Shadow Mode: verificar SL/TP (incluso cuando daily loss bloquea) ──
+                if getattr(cfg, "SHADOW_MODE_ENABLED", False):
+                    from modules.shadow_tracker import check_shadow_positions
+                    _shadow_prices = {}
+                    for _sym in cfg.SYMBOLS:
+                        _tick = mt5.symbol_info_tick(_sym)
+                        if _tick:
+                            _shadow_prices[_sym] = {"bid": _tick.bid, "ask": _tick.ask}
+                    check_shadow_positions(_shadow_prices)
+
                 _update_web_status_snapshot(balance, equity, open_positions)
                 _render_dashboard(balance, equity, open_positions)
                 time.sleep(cfg.LOOP_SLEEP_SEC)
@@ -547,6 +570,17 @@ def run():
 
             open_positions = get_open_positions()
             manage_positions(open_positions, state.ind_cache)
+
+            # ── Shadow Mode: verificar SL/TP de posiciones virtuales ──
+            if getattr(cfg, "SHADOW_MODE_ENABLED", False):
+                from modules.shadow_tracker import check_shadow_positions
+                current_prices = {}
+                for sym in cfg.SYMBOLS:
+                    tick = mt5.symbol_info_tick(sym)
+                    if tick:
+                        current_prices[sym] = {"bid": tick.bid, "ask": tick.ask}
+                check_shadow_positions(current_prices)
+
             _update_web_status_snapshot(balance, equity, open_positions)
             _render_dashboard(balance, equity, open_positions)
 
