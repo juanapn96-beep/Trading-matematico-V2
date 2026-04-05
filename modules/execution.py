@@ -16,6 +16,18 @@ log = logging.getLogger(__name__)
 # Desviación máxima de precio (pips) permitida en el cierre de emergencia.
 _EMERGENCY_CLOSE_DEVIATION = 50
 
+
+def _get_filling_type(symbol: str) -> int:
+    """Auto-detect the filling mode supported by the symbol."""
+    sym_info = mt5.symbol_info(symbol)
+    if sym_info is not None:
+        fm = sym_info.filling_mode
+        if fm & mt5.SYMBOL_FILLING_IOC:
+            return mt5.ORDER_FILLING_IOC
+        if fm & mt5.SYMBOL_FILLING_FOK:
+            return mt5.ORDER_FILLING_FOK
+    return mt5.ORDER_FILLING_RETURN
+
 # ── TF Map MT5 ───────────────────────────────────────────────────
 TF_MAP = {
     "M1":  mt5.TIMEFRAME_M1,  "M5":  mt5.TIMEFRAME_M5,
@@ -51,7 +63,7 @@ def open_order(symbol: str, direction: str, sl: float, tp: float, volume: float)
         "magic":        cfg.MAGIC_NUMBER,
         "comment":      "ZAR v6",
         "type_time":    mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling_type(symbol),
     }
     result = mt5.order_send(request)
     if result.retcode == mt5.TRADE_RETCODE_DONE:
@@ -71,6 +83,7 @@ def move_sl(ticket: int, new_sl: float) -> bool:
         return False
     r = mt5.order_send({
         "action":   mt5.TRADE_ACTION_SLTP,
+        "symbol":   pos[0].symbol,
         "position": ticket,
         "sl":       new_sl,
         "tp":       pos[0].tp,
@@ -111,7 +124,7 @@ def close_position_market(pos: dict, comment: str = "CB-emergency") -> bool:
         "magic":        cfg.MAGIC_NUMBER,
         "comment":      comment[:31],
         "type_time":    mt5.ORDER_TIME_GTC,
-        "type_filling": mt5.ORDER_FILLING_IOC,
+        "type_filling": _get_filling_type(symbol),
     }
     result = mt5.order_send(request)
     if result.retcode == mt5.TRADE_RETCODE_DONE:
