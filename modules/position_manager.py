@@ -338,9 +338,7 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
         # ── Alimentar Exec Quality Monitor (Mejora 13) ───────────
         if getattr(cfg, "EXEC_QUALITY_ENABLED", True):
             try:
-                slip_pips = float(
-                    (trade_info.get("slippage_pips") if trade_info else None) or 0.0
-                )
+                slip_pips = float(trade_info.get("slippage_pips", 0.0) if trade_info else 0.0)
                 _record_exec_quality(
                     symbol=symbol, ticket=ticket, slippage_pips=slip_pips,
                 )
