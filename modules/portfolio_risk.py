@@ -17,7 +17,10 @@
 
 import logging
 import math
+from datetime import datetime, timezone
 from typing import List, Tuple, Optional
+
+import numpy as np
 
 import config as cfg
 
@@ -71,6 +74,102 @@ def _get_correlation(sym_a: str, sym_b: str) -> float:
     )
 
 
+# ── Rolling Correlation Cache ────────────────────────────────────
+_rolling_corr_cache: dict = {}  # {(sym_a, sym_b): {"corr": float, "ts": float}}
+
+# Use config values with module-level fallbacks
+_ROLLING_CORR_TTL_SEC = 300  # default; overridden by cfg at runtime
+_ROLLING_CORR_WINDOW  = 20   # default; overridden by cfg at runtime
+
+
+def _compute_rolling_correlation(sym_a: str, sym_b: str) -> Optional[float]:
+    """
+    Calculate rolling Pearson correlation between two symbols using
+    the last ROLLING_CORR_WINDOW H1 close prices.
+
+    Returns None if insufficient data available.
+    Uses MT5 to fetch candle data (import at function level to avoid
+    import errors in test/backtest contexts).
+    """
+    try:
+        import MetaTrader5 as mt5
+    except ImportError:
+        return None
+
+    window = int(getattr(cfg, "ROLLING_CORR_WINDOW", _ROLLING_CORR_WINDOW))
+    tf = mt5.TIMEFRAME_H1
+    n  = window + 5  # extra buffer for safety
+
+    rates_a = mt5.copy_rates_from_pos(sym_a, tf, 0, n)
+    rates_b = mt5.copy_rates_from_pos(sym_b, tf, 0, n)
+
+    if rates_a is None or rates_b is None:
+        return None
+    if len(rates_a) < window or len(rates_b) < window:
+        return None
+
+    # Align by timestamp — use only matching candles
+    # MT5 structured arrays: field 'time' = timestamp, field 'close' = close price
+    times_a = {r['time']: r['close'] for r in rates_a}
+    times_b = {r['time']: r['close'] for r in rates_b}
+
+    common_times = sorted(set(times_a.keys()) & set(times_b.keys()))
+    if len(common_times) < window:
+        return None
+
+    # Take the last ROLLING_CORR_WINDOW common timestamps
+    common_times = common_times[-window:]
+
+    closes_a = np.array([times_a[t] for t in common_times])
+    closes_b = np.array([times_b[t] for t in common_times])
+
+    # Calculate returns
+    returns_a = np.diff(closes_a) / closes_a[:-1]
+    returns_b = np.diff(closes_b) / closes_b[:-1]
+
+    if len(returns_a) < 5:
+        return None
+
+    # Pearson correlation
+    corr = float(np.corrcoef(returns_a, returns_b)[0, 1])
+    if np.isnan(corr):
+        return None
+
+    return round(corr, 3)
+
+
+def _get_correlation_dynamic(sym_a: str, sym_b: str) -> float:
+    """
+    Get correlation between two symbols.
+    Tries rolling correlation first (cached with TTL), falls back to static matrix.
+    """
+    if sym_a == sym_b:
+        return 1.0
+
+    if not getattr(cfg, "ROLLING_CORR_ENABLED", True):
+        return _get_correlation(sym_a, sym_b)
+
+    # Normalize key order for cache
+    key = tuple(sorted([sym_a, sym_b]))
+    now = datetime.now(timezone.utc).timestamp()
+    ttl = int(getattr(cfg, "ROLLING_CORR_TTL_SEC", _ROLLING_CORR_TTL_SEC))
+
+    cached = _rolling_corr_cache.get(key)
+    if cached and (now - cached["ts"]) < ttl:
+        return cached["corr"]
+
+    # Try computing rolling correlation
+    rolling = _compute_rolling_correlation(sym_a, sym_b)
+    if rolling is not None:
+        _rolling_corr_cache[key] = {"corr": rolling, "ts": now}
+        return rolling
+
+    # Fallback to static
+    static = _get_correlation(sym_a, sym_b)
+    _rolling_corr_cache[key] = {"corr": static, "ts": now}
+    return static
+
+
 def get_effective_portfolio_risk(
     open_positions: list,
     new_symbol: str,
@@ -121,7 +220,7 @@ def get_effective_portfolio_risk(
         for j in range(i + 1, n):
             sym_i, dir_i = positions[i]
             sym_j, dir_j = positions[j]
-            rho = _get_correlation(sym_i, sym_j)
+            rho = _get_correlation_dynamic(sym_i, sym_j)
             # Si ambas posiciones van en la misma dirección, la correlación
             # positiva AUMENTA el riesgo.  Si van en dirección opuesta con
             # correlación positiva, REDUCE el riesgo (cobertura parcial).

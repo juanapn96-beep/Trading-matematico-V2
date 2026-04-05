@@ -26,8 +26,91 @@ from modules.telegram_notifier import (
 log = logging.getLogger(__name__)
 
 # ── Module-level state ───────────────────────────────────────────
-be_activated: set = set()  # tickets that passed at least trail stage 1
-tp_alerted:   set = set()  # tickets that already received TP-near alert
+be_activated:     set = set()  # tickets that passed at least trail stage 1
+tp_alerted:       set = set()  # tickets that already received TP-near alert
+_partial_tp_done: set = set()  # tickets that already had partial TP executed
+
+
+def _check_partial_tp(pos: dict) -> bool:
+    """
+    Check if a position should have a partial take profit.
+    If triggered: close PARTIAL_TP_CLOSE_PCT of the volume and move SL to breakeven.
+    Returns True if partial TP was executed.
+    """
+    if not getattr(cfg, "PARTIAL_TP_ENABLED", False):
+        return False
+
+    ticket = pos["ticket"]
+    if ticket in _partial_tp_done:
+        return False  # Already did partial TP for this ticket
+
+    symbol    = pos["symbol"]
+    direction = "BUY" if pos["type"] == 0 else "SELL"
+    open_p    = pos["price_open"]
+    cur_p     = pos["price_current"]
+    tp        = float(pos.get("tp", 0.0) or 0.0)
+    volume    = float(pos.get("volume", 0.0))
+
+    if tp == 0 or volume <= 0:
+        return False
+
+    # Calculate progress toward TP
+    tp_total = abs(tp - open_p)
+    if tp_total <= 0:
+        return False
+
+    if direction == "BUY":
+        tp_progress = (cur_p - open_p) / tp_total
+    else:
+        tp_progress = (open_p - cur_p) / tp_total
+
+    trigger_pct = float(getattr(cfg, "PARTIAL_TP_TRIGGER_PCT", 0.50))
+    if tp_progress < trigger_pct:
+        return False
+
+    # Calculate partial close volume
+    close_pct      = float(getattr(cfg, "PARTIAL_TP_CLOSE_PCT", 0.50))
+    min_vol        = float(getattr(cfg, "PARTIAL_TP_MIN_VOLUME", 0.01))
+    partial_volume = round(volume * close_pct, 2)
+
+    if partial_volume < min_vol:
+        return False  # Partial volume too small
+
+    remaining_volume = round(volume - partial_volume, 2)
+    if remaining_volume < min_vol:
+        return False  # Can't leave a valid remaining position
+
+    # Execute partial close — reuse close_position_market with partial volume
+    partial_pos = {
+        "ticket": ticket,
+        "symbol": symbol,
+        "volume": partial_volume,
+        "type":   pos["type"],
+    }
+
+    from modules.execution import move_sl
+    success = close_position_market(partial_pos, comment="PartialTP")
+    if success:
+        _partial_tp_done.add(ticket)
+        # Move SL to breakeven on the remaining position
+        move_sl(ticket, open_p)
+        log.info(
+            f"[partial_tp] ✅ #{ticket} {symbol} {direction}: "
+            f"closed {partial_volume} lots at {tp_progress:.0%} TP progress, "
+            f"remaining {remaining_volume} lots with SL→BE"
+        )
+        try:
+            from modules.telegram_notifier import _send
+            _send(
+                f"✂️ *Partial TP* #{ticket} {symbol} {direction}\n"
+                f"Cerrado {partial_volume} lotes a {tp_progress:.0%} del TP\n"
+                f"Restante {remaining_volume} lotes con SL→BE"
+            )
+        except Exception:
+            pass
+        return True
+
+    return False
 
 
 def manage_positions(positions: list, ind_cache: dict) -> None:
@@ -56,6 +139,9 @@ def manage_positions(positions: list, ind_cache: dict) -> None:
                 from modules.telegram_notifier import _send as telegram_send
                 telegram_send(f"🚨 <b>CIRCUIT BREAKER</b>\n{cb_reason}")
             continue
+
+        # Partial Take Profit check (before trailing stop)
+        _check_partial_tp(pos)
 
         # FIX 11: trailing stop progresivo
         action_str = manage_trailing_stop(
@@ -222,6 +308,7 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
         cleanup_ticket(ticket)
         be_activated.discard(ticket)
         tp_alerted.discard(ticket)
+        _partial_tp_done.discard(ticket)
         state.tickets_en_memoria.discard(ticket)
 
     return unresolved_tickets

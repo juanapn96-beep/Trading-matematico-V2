@@ -20,11 +20,12 @@ except ImportError:
     BACKTEST_INITIAL_BALANCE = 10000.0
 
 try:
-    from modules.neural_brain import get_equity_curve_data, get_distribution_data, get_recent_trades
+    from modules.neural_brain import get_equity_curve_data, get_distribution_data, get_recent_trades, get_advanced_metrics
 except ImportError:
     def get_equity_curve_data(*a, **kw): return []
     def get_distribution_data(): return {"by_symbol": [], "by_hour": []}
     def get_recent_trades(*a, **kw): return []
+    def get_advanced_metrics(): return {}
 
 
 HTML_TEMPLATE = """
@@ -460,6 +461,44 @@ HTML_TEMPLATE = """
             <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">Trades por hora UTC</div>
             <div class="chart-container"><canvas id="hourDistChart"></canvas></div>
           </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <div class="section-title" onclick="toggleSection(this)">🔬 Métricas Avanzadas de Scalping</div>
+      <div class="collapsible-body">
+        <div class="chart-grid">
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">Win Rate por Sesión</div>
+            <div class="chart-container"><canvas id="sessionWrChart"></canvas></div>
+          </div>
+          <div>
+            <div style="font-size:13px;color:var(--muted);margin-bottom:8px;">Slippage por Símbolo (pips)</div>
+            <div class="chart-container"><canvas id="slippageChart"></canvas></div>
+          </div>
+        </div>
+        <div class="stats" style="margin-top:18px;">
+          <article class="stat">
+            <div class="stat-label">Duración Media (todos)</div>
+            <div id="avgDuration" class="stat-value mono">—</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Duración Ganadores</div>
+            <div id="avgDurationWin" class="stat-value mono">—</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Duración Perdedores</div>
+            <div id="avgDurationLoss" class="stat-value mono">—</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Score Ø Ganadores</div>
+            <div id="scoreWinners" class="stat-value mono">—</div>
+          </article>
+          <article class="stat">
+            <div class="stat-label">Score Ø Perdedores</div>
+            <div id="scoreLosers" class="stat-value mono">—</div>
+          </article>
         </div>
       </div>
     </section>
@@ -1070,7 +1109,114 @@ HTML_TEMPLATE = """
         renderSymbolDist(),
         renderHourDist(),
         renderRecentTrades(),
+        renderAdvancedMetrics(),
       ]);
+    }
+
+    let _sessionWrChart = null;
+    let _slippageChart  = null;
+
+    async function renderAdvancedMetrics() {
+      try {
+        const response = await fetch('/api/advanced_metrics', { cache: 'no-store' });
+        const data = await response.json();
+
+        // ── Win Rate por Sesión ──────────────────────────────────
+        const sessions   = (data.wr_by_session || []).map(s => s.session);
+        const wrValues   = (data.wr_by_session || []).map(s => s.wr);
+        const totalTrades = (data.wr_by_session || []).map(s => s.total);
+
+        const ctxS = document.getElementById('sessionWrChart')?.getContext('2d');
+        if (ctxS) {
+          if (_sessionWrChart) _sessionWrChart.destroy();
+          _sessionWrChart = new Chart(ctxS, {
+            type: 'bar',
+            data: {
+              labels: sessions,
+              datasets: [{
+                label: 'Win Rate %',
+                data: wrValues,
+                backgroundColor: wrValues.map(v => v >= 50 ? 'rgba(74,222,128,0.7)' : 'rgba(248,113,113,0.7)'),
+                borderRadius: 4,
+              }],
+            },
+            options: {
+              indexAxis: 'y',
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: {
+                legend: { display: false },
+                tooltip: {
+                  callbacks: {
+                    label: (ctx) => {
+                      const idx = ctx.dataIndex;
+                      const t = data.wr_by_session[idx];
+                      return ` WR: ${t.wr}% (${t.wins}W/${t.losses}L, ${t.total} trades)`;
+                    }
+                  }
+                }
+              },
+              scales: {
+                x: { max: 100, ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { display: false } },
+              },
+            },
+          });
+        }
+
+        // ── Slippage por Símbolo ─────────────────────────────────
+        const slipSymbols = (data.slippage_by_symbol || []).map(s => s.symbol);
+        const avgSlip     = (data.slippage_by_symbol || []).map(s => s.avg_slippage_pips);
+        const maxSlip     = (data.slippage_by_symbol || []).map(s => s.max_slippage_pips);
+
+        const ctxSl = document.getElementById('slippageChart')?.getContext('2d');
+        if (ctxSl) {
+          if (_slippageChart) _slippageChart.destroy();
+          _slippageChart = new Chart(ctxSl, {
+            type: 'bar',
+            data: {
+              labels: slipSymbols,
+              datasets: [
+                {
+                  label: 'Avg Slippage',
+                  data: avgSlip,
+                  backgroundColor: 'rgba(251,191,36,0.7)',
+                  borderRadius: 4,
+                },
+                {
+                  label: 'Max Slippage',
+                  data: maxSlip,
+                  backgroundColor: 'rgba(248,113,113,0.5)',
+                  borderRadius: 4,
+                },
+              ],
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              plugins: { legend: { labels: { color: '#94a3b8' } } },
+              scales: {
+                x: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+                y: { ticks: { color: '#94a3b8' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+              },
+            },
+          });
+        }
+
+        // ── Duration stats ───────────────────────────────────────
+        const fmt = v => v != null && v >= 0 ? `${v} min` : '—';
+        setText('avgDuration',    fmt(data.avg_duration_min));
+        setText('avgDurationWin', fmt(data.avg_duration_winners));
+        setText('avgDurationLoss',fmt(data.avg_duration_losers));
+
+        // ── Score stats ──────────────────────────────────────────
+        const fmtScore = v => v != null ? String(v) : '—';
+        setText('scoreWinners', fmtScore(data.score_winners_avg));
+        setText('scoreLosers',  fmtScore(data.score_losers_avg));
+
+      } catch (error) {
+        console.warn('renderAdvancedMetrics error:', error);
+      }
     }
 
     // Initial chart render + periodic refresh (every 30 seconds)
@@ -1119,6 +1265,11 @@ def create_app(status_provider):
     @app.get("/api/recent_trades")
     def api_recent_trades():
         data = get_recent_trades(limit=DASHBOARD_RECENT_TRADES_LIMIT)
+        return jsonify(data)
+
+    @app.get("/api/advanced_metrics")
+    def api_advanced_metrics():
+        data = get_advanced_metrics()
         return jsonify(data)
 
     return app
