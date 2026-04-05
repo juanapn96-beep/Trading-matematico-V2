@@ -29,6 +29,11 @@ except ImportError:
     def get_recent_shadow_trades(*a, **kw): return []
     def get_shadow_stats(): return {}
 
+try:
+    from modules.exec_quality_monitor import get_all_exec_quality
+except ImportError:
+    def get_all_exec_quality(): return {}
+
 
 HTML_TEMPLATE = """
 <!doctype html>
@@ -545,6 +550,24 @@ HTML_TEMPLATE = """
               </tr>
             </thead>
             <tbody id="shadowTradesTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="execQualitySection">
+      <div class="section-title" onclick="toggleSection(this)">⚡ Exec Quality Monitor</div>
+      <div class="collapsible-body">
+        <div id="execQualityEmpty" class="empty" style="display:none;">Sin datos de ejecución aún.</div>
+        <div class="trades-table-wrap">
+          <table id="execQualityTable" style="display:none;">
+            <thead>
+              <tr>
+                <th>Símbolo</th><th>Score</th><th>Avg Slip</th>
+                <th>P95 Slip</th><th>Ratio Exc.</th><th>Muestras</th><th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="execQualityTableBody"></tbody>
           </table>
         </div>
       </div>
@@ -1134,6 +1157,7 @@ HTML_TEMPLATE = """
         renderRecentTrades(),
         renderAdvancedMetrics(),
         renderShadowTrades(),
+        renderExecQuality(),
       ]);
     }
 
@@ -1300,6 +1324,45 @@ HTML_TEMPLATE = """
     // Initial chart render + periodic refresh (every 30 seconds)
     refreshCharts();
     setInterval(refreshCharts, {{ chart_refresh_ms }});
+
+    async function renderExecQuality() {
+      try {
+        const response = await fetch('/api/exec_quality', { cache: 'no-store' });
+        const data = await response.json();
+        const symbols = Object.keys(data);
+        const emptyEl = document.getElementById('execQualityEmpty');
+        const tableEl = document.getElementById('execQualityTable');
+        const tbody   = document.getElementById('execQualityTableBody');
+        if (!symbols.length) {
+          if (emptyEl) emptyEl.style.display = '';
+          if (tableEl) tableEl.style.display = 'none';
+          return;
+        }
+        if (emptyEl) emptyEl.style.display = 'none';
+        if (tableEl) tableEl.style.display = '';
+        const statusColor = {
+          good:     '#43c6ac',
+          warning:  '#f0c040',
+          degraded: '#e09040',
+          critical: '#e05c5c',
+        };
+        tbody.innerHTML = symbols.map(sym => {
+          const q = data[sym];
+          const color = statusColor[q.status] || '#aaa';
+          return `<tr>
+            <td><strong>${sym}</strong></td>
+            <td><span style="color:${color};font-weight:700">${(q.quality_score||0).toFixed(1)}</span></td>
+            <td class="mono">${(q.avg_slippage_pips||0).toFixed(2)}</td>
+            <td class="mono">${(q.p95_slippage_pips||0).toFixed(2)}</td>
+            <td class="mono">${((q.excessive_ratio||0)*100).toFixed(0)}%</td>
+            <td class="mono">${q.sample_count||0}</td>
+            <td><span style="color:${color}">${q.status||'—'}</span></td>
+          </tr>`;
+        }).join('');
+      } catch (error) {
+        console.warn('renderExecQuality error:', error);
+      }
+    }
   </script>
 </body>
 </html>
@@ -1361,6 +1424,11 @@ def create_app(status_provider):
             "stats":  stats,
             "trades": trades,
         })
+
+    @app.get("/api/exec_quality")
+    def api_exec_quality():
+        data = get_all_exec_quality()
+        return jsonify(data)
 
     return app
 
