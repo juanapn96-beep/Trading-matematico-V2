@@ -752,6 +752,52 @@ def _execute_decision(
         set_symbol_status(symbol, "🌀 Hilbert bloqueó SELL")
         return
 
+    # ── MTF Confirmation Gate (Mejora 12) ────────────────────────
+    if getattr(cfg, "MTF_ENABLED", False):
+        from modules.mtf_confirmation import check_mtf_confirmation
+        mtf = check_mtf_confirmation(symbol, action, sym_cfg)
+
+        # Guardar resultado MTF en el detail cache para el dashboard
+        state.symbol_detail_cache.setdefault(symbol, {})["mtf_confirmation"] = mtf
+
+        if mtf is not None and not mtf["htf_agrees"]:
+            htf_trend_str = mtf["htf_trend"]
+            if getattr(cfg, "MTF_REQUIRE_AGREEMENT", True):
+                # Modo duro: bloquear el trade
+                msg = f"⛔ MTF: HTF={htf_trend_str} vs {action}"
+                log.info(f"[{symbol}] ⛔ MTF bloqueó {action} — HTF={htf_trend_str} contradice")
+                state.last_action = f"⛔ MTF bloqueó {action} {symbol}"
+                set_symbol_status(symbol, msg[:48])
+                return
+            else:
+                # Modo suave: penalizar score (ya se aplicó en decision_engine o aquí como aviso)
+                log.info(f"[{symbol}] ⚠️ MTF penalty: HTF={htf_trend_str} contradice {action}")
+
+    # ── Shadow Mode bypass (Mejora 15) ───────────────────────────
+    if getattr(cfg, "SHADOW_MODE_ENABLED", False):
+        from modules.shadow_tracker import open_shadow_trade
+        from modules.telegram_notifier import telegram_send
+        shadow_id = open_shadow_trade(
+            symbol=symbol, direction=action, entry_price=price,
+            sl=sl, tp=tp, volume=vol, score=score, reason=reason,
+            ind=ind,
+        )
+        log.info(
+            f"{cfg.SHADOW_LOG_PREFIX} [shadow] Trade virtual #{shadow_id} "
+            f"{action} {symbol} @ {price:.5f}"
+        )
+        if getattr(cfg, "SHADOW_NOTIFY_TELEGRAM", True):
+            telegram_send(
+                f"{cfg.SHADOW_LOG_PREFIX} <b>SHADOW</b>: {action} <code>{symbol}</code> "
+                f"@ <code>{price:.5f}</code>  SL=<code>{sl:.5f}</code> "
+                f"TP=<code>{tp:.5f}</code>  vol=<code>{vol}</code>"
+            )
+        set_symbol_status(symbol, f"{cfg.SHADOW_LOG_PREFIX} Shadow {action} @ {price:.5f}")
+        state.last_action = (
+            f"{cfg.SHADOW_LOG_PREFIX} shadow {action} {symbol} #{shadow_id}"
+        )
+        return  # No ejecutar orden real
+
     ticket, executed_price = open_order(symbol, action, sl, tp, vol)
     if ticket is None:
         state.last_action = f"❌ Orden fallida {symbol}"

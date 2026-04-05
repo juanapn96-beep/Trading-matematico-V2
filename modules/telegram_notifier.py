@@ -484,3 +484,39 @@ def notify_error(error_msg: str):
         f"<code>{_esc(error_msg[:400])}</code>",
         f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
     ]))
+
+
+# ════════════════════════════════════════════════════════════════
+#  SHADOW MODE (Mejora 15)
+# ════════════════════════════════════════════════════════════════
+
+def telegram_send(text: str) -> bool:
+    """Wrapper público de _send() para uso desde otros módulos."""
+    return _send(text)
+
+
+def notify_shadow_trade_closed(
+    shadow_id: int,
+    symbol: str,
+    direction: str,
+    entry_price: float,
+    exit_price: float,
+    result: str,
+    profit_pips: float,
+    duration_min: int,
+    emoji: str = "👻",
+):
+    """Notifica el cierre de un shadow trade por SL o TP."""
+    icon = _icon(symbol)
+    dir_arrow = "📈" if direction == "BUY" else "📉"
+    lines = [
+        f"👻 <b>SHADOW CLOSED</b> {icon} <code>{symbol}</code> #{shadow_id}",
+        "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+        f"{dir_arrow} Dirección:  <b>{direction}</b>   {emoji} {result}",
+        f"📥 Entrada:   <code>{entry_price:.5f}</code>",
+        f"📤 Salida:    <code>{exit_price:.5f}</code>",
+        f"{'✅' if result == 'WIN' else '❌'} P&amp;L:       <code>{profit_pips:+.1f} pips</code>",
+        f"⏱ Duración:  <code>{duration_min} min</code>",
+        f"⏰ <code>{datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+    ]
+    _send("\n".join(lines))

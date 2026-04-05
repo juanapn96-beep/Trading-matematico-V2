@@ -729,6 +729,29 @@ def init_db():
             regime    TEXT,
             timestamp TEXT
         );
+
+        CREATE TABLE IF NOT EXISTS shadow_trades (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            symbol        TEXT,
+            direction     TEXT,
+            entry_price   REAL,
+            sl            REAL,
+            tp            REAL,
+            volume        REAL,
+            score         REAL,
+            reason        TEXT,
+            h1_trend      TEXT,
+            htf_trend     TEXT,
+            hurst         REAL,
+            rsi           REAL,
+            atr           REAL,
+            opened_at     TEXT,
+            closed_at     TEXT,
+            exit_price    REAL,
+            result        TEXT,
+            profit_pips   REAL,
+            duration_min  INTEGER
+        );
     """)
 
     # ── MIGRACIÓN AUTOMÁTICA — agrega columnas nuevas si no existen ──
@@ -1932,3 +1955,108 @@ def get_advanced_metrics() -> dict:
         con.close()
 
     return result
+
+
+# ════════════════════════════════════════════════════════════════
+#  MEJORA 15 — SHADOW TRADES (Paper Trading)
+# ════════════════════════════════════════════════════════════════
+
+def save_shadow_trade(
+    symbol: str, direction: str, entry_price: float,
+    sl: float, tp: float, volume: float, score: float,
+    reason: str, h1_trend: str, htf_trend: str,
+    hurst: float, rsi: float, atr: float,
+) -> int:
+    """Inserta un nuevo shadow trade. Retorna el id asignado."""
+    from datetime import datetime, timezone
+    opened_at = datetime.now(timezone.utc).isoformat()
+    try:
+        con = sqlite3.connect(DB_PATH)
+        cur = con.execute(
+            """INSERT INTO shadow_trades
+               (symbol, direction, entry_price, sl, tp, volume, score,
+                reason, h1_trend, htf_trend, hurst, rsi, atr, opened_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (symbol, direction, entry_price, sl, tp, volume, score,
+             reason, h1_trend, htf_trend, hurst, rsi, atr, opened_at),
+        )
+        shadow_id = cur.lastrowid
+        con.commit()
+        con.close()
+        return shadow_id
+    except Exception as e:
+        log.error(f"[shadow] Error guardando shadow trade: {e}")
+        return -1
+
+
+def close_shadow_trade(
+    shadow_id: int, exit_price: float, result: str,
+    profit_pips: float, duration_min: int,
+) -> None:
+    """Actualiza un shadow trade al cerrarse (SL/TP alcanzado)."""
+    from datetime import datetime, timezone
+    closed_at = datetime.now(timezone.utc).isoformat()
+    try:
+        con = sqlite3.connect(DB_PATH)
+        con.execute(
+            """UPDATE shadow_trades
+               SET closed_at=?, exit_price=?, result=?, profit_pips=?, duration_min=?
+               WHERE id=?""",
+            (closed_at, exit_price, result, profit_pips, duration_min, shadow_id),
+        )
+        con.commit()
+        con.close()
+    except Exception as e:
+        log.error(f"[shadow] Error cerrando shadow trade #{shadow_id}: {e}")
+
+
+def get_shadow_stats() -> dict:
+    """Retorna estadísticas agregadas de los shadow trades cerrados."""
+    result = {
+        "total": 0, "wins": 0, "losses": 0,
+        "win_rate": 0.0, "avg_profit_pips": 0.0,
+    }
+    try:
+        con = sqlite3.connect(DB_PATH)
+        row = con.execute(
+            """SELECT COUNT(*),
+                      SUM(CASE WHEN result='WIN'  THEN 1 ELSE 0 END),
+                      SUM(CASE WHEN result='LOSS' THEN 1 ELSE 0 END),
+                      AVG(profit_pips)
+               FROM shadow_trades
+               WHERE result IS NOT NULL"""
+        ).fetchone()
+        con.close()
+        if row and row[0]:
+            total = int(row[0])
+            wins  = int(row[1] or 0)
+            losses = int(row[2] or 0)
+            result["total"]           = total
+            result["wins"]            = wins
+            result["losses"]          = losses
+            result["win_rate"]        = round(wins / total * 100, 1) if total else 0.0
+            result["avg_profit_pips"] = round(row[3] or 0.0, 2)
+    except Exception as e:
+        log.warning(f"[shadow] Error obteniendo estadísticas: {e}")
+    return result
+
+
+def get_recent_shadow_trades(limit: int = 50) -> list:
+    """Retorna los últimos N shadow trades para el dashboard."""
+    rows = []
+    try:
+        con = sqlite3.connect(DB_PATH)
+        cur = con.execute(
+            """SELECT id, symbol, direction, entry_price, sl, tp, volume,
+                      score, h1_trend, htf_trend, hurst, rsi, atr,
+                      opened_at, closed_at, exit_price, result, profit_pips, duration_min
+               FROM shadow_trades
+               ORDER BY id DESC LIMIT ?""",
+            (limit,),
+        )
+        cols = [d[0] for d in cur.description]
+        rows = [dict(zip(cols, r)) for r in cur.fetchall()]
+        con.close()
+    except Exception as e:
+        log.warning(f"[shadow] Error obteniendo shadow trades: {e}")
+    return rows

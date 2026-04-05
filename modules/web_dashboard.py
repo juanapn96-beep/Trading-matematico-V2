@@ -20,12 +20,14 @@ except ImportError:
     BACKTEST_INITIAL_BALANCE = 10000.0
 
 try:
-    from modules.neural_brain import get_equity_curve_data, get_distribution_data, get_recent_trades, get_advanced_metrics
+    from modules.neural_brain import get_equity_curve_data, get_distribution_data, get_recent_trades, get_advanced_metrics, get_recent_shadow_trades, get_shadow_stats
 except ImportError:
     def get_equity_curve_data(*a, **kw): return []
     def get_distribution_data(): return {"by_symbol": [], "by_hour": []}
     def get_recent_trades(*a, **kw): return []
     def get_advanced_metrics(): return {}
+    def get_recent_shadow_trades(*a, **kw): return []
+    def get_shadow_stats(): return {}
 
 
 HTML_TEMPLATE = """
@@ -522,6 +524,27 @@ HTML_TEMPLATE = """
               </tr>
             </thead>
             <tbody id="recentTradesTable"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel" id="shadowSection">
+      <div class="section-title" onclick="toggleSection(this)">👻 Shadow Mode (Paper Trading)</div>
+      <div class="collapsible-body">
+        <div id="shadowModeStatus" style="margin-bottom:12px;font-weight:600;"></div>
+        <div class="stats-grid" id="shadowStatsGrid" style="margin-bottom:16px;"></div>
+        <div class="trades-table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>#</th><th>Símbolo</th><th>Dir</th><th>Entrada</th>
+                <th>SL</th><th>TP</th><th>Vol</th><th>HTF Trend</th>
+                <th>Abierto</th><th>Cerrado</th><th>Salida</th>
+                <th>Pips</th><th>Resultado</th>
+              </tr>
+            </thead>
+            <tbody id="shadowTradesTable"></tbody>
           </table>
         </div>
       </div>
@@ -1110,6 +1133,7 @@ HTML_TEMPLATE = """
         renderHourDist(),
         renderRecentTrades(),
         renderAdvancedMetrics(),
+        renderShadowTrades(),
       ]);
     }
 
@@ -1219,6 +1243,60 @@ HTML_TEMPLATE = """
       }
     }
 
+    async function renderShadowTrades() {
+      try {
+        const response = await fetch('/api/shadow_trades', { cache: 'no-store' });
+        const data = await response.json();
+
+        // Status banner
+        const statusEl = document.getElementById('shadowModeStatus');
+        if (statusEl) {
+          statusEl.innerHTML = data.shadow_mode_enabled
+            ? '👻 <span style="color:#f0c040">SHADOW MODE ACTIVO — No se ejecutan órdenes reales</span>'
+            : '⚪ Shadow Mode desactivado';
+        }
+
+        // Stats
+        const statsEl = document.getElementById('shadowStatsGrid');
+        if (statsEl && data.stats) {
+          const s = data.stats;
+          statsEl.innerHTML = `
+            <div class="stat-card"><div class="stat-label">Trades</div><div class="stat-value">${s.total||0}</div></div>
+            <div class="stat-card"><div class="stat-label">Wins</div><div class="stat-value" style="color:#43c6ac">${s.wins||0}</div></div>
+            <div class="stat-card"><div class="stat-label">Losses</div><div class="stat-value" style="color:#e05c5c">${s.losses||0}</div></div>
+            <div class="stat-card"><div class="stat-label">Win Rate</div><div class="stat-value">${(s.win_rate||0).toFixed(1)}%</div></div>
+            <div class="stat-card"><div class="stat-label">Avg Pips</div><div class="stat-value">${(s.avg_profit_pips||0).toFixed(1)}</div></div>
+          `;
+        }
+
+        // Trades table
+        const tbody = document.getElementById('shadowTradesTable');
+        if (tbody && data.trades) {
+          tbody.innerHTML = data.trades.map(t => {
+            const resColor = t.result === 'WIN' ? '#43c6ac' : t.result === 'LOSS' ? '#e05c5c' : '#aaa';
+            const pips = t.profit_pips != null ? (t.profit_pips > 0 ? '+' : '') + t.profit_pips.toFixed(1) : '—';
+            return `<tr>
+              <td>${t.id}</td>
+              <td>${t.symbol||'—'}</td>
+              <td>${t.direction||'—'}</td>
+              <td>${t.entry_price != null ? t.entry_price.toFixed(5) : '—'}</td>
+              <td>${t.sl != null ? t.sl.toFixed(5) : '—'}</td>
+              <td>${t.tp != null ? t.tp.toFixed(5) : '—'}</td>
+              <td>${t.volume != null ? t.volume.toFixed(2) : '—'}</td>
+              <td>${t.htf_trend||t.h1_trend||'—'}</td>
+              <td>${t.opened_at ? t.opened_at.substring(11,16) : '—'}</td>
+              <td>${t.closed_at ? t.closed_at.substring(11,16) : '—'}</td>
+              <td>${t.exit_price != null ? t.exit_price.toFixed(5) : '—'}</td>
+              <td style="color:${t.profit_pips>0?'#43c6ac':t.profit_pips<0?'#e05c5c':'#aaa'}">${pips}</td>
+              <td style="color:${resColor}">${t.result||'OPEN'}</td>
+            </tr>`;
+          }).join('');
+        }
+      } catch (error) {
+        console.warn('renderShadowTrades error:', error);
+      }
+    }
+
     // Initial chart render + periodic refresh (every 30 seconds)
     refreshCharts();
     setInterval(refreshCharts, {{ chart_refresh_ms }});
@@ -1271,6 +1349,18 @@ def create_app(status_provider):
     def api_advanced_metrics():
         data = get_advanced_metrics()
         return jsonify(data)
+
+    @app.get("/api/shadow_trades")
+    def api_shadow_trades():
+        import config as cfg
+        shadow_enabled = getattr(cfg, "SHADOW_MODE_ENABLED", False)
+        trades = get_recent_shadow_trades(limit=50)
+        stats  = get_shadow_stats()
+        return jsonify({
+            "shadow_mode_enabled": shadow_enabled,
+            "stats":  stats,
+            "trades": trades,
+        })
 
     return app
 
