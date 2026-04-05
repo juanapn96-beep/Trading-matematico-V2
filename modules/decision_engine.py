@@ -260,6 +260,8 @@ def deterministic_decision(
 
     # Ajuste por calidad de sesión: subir el umbral fuera de sesión óptima
     session_q = _get_session_quality(sym_cfg)
+    if session_q <= 0:
+        return {"decision": "HOLD", "confidence": 1, "reason": "session_q=0 (dead session)", "score": 0.0}
     if session_q < 1.0:
         min_score = min_score / session_q
         reasons.append(f"session_q={session_q:.1f}")

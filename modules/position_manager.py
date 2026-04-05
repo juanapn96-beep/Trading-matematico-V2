@@ -280,8 +280,6 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
 
     unresolved_tickets = set()
     for ticket in closed:
-        # Clean up per-ticket state in all modules
-        cleanup_ticket(ticket)
         state.trade_mode_cache.pop(ticket, None)
 
         deal = closing_deals.get(ticket)

@@ -920,8 +920,8 @@ def build_features(
     """Construye el vector de 32 features normalizados."""
     hilbert  = ind.get("hilbert", {})
     bb_map   = {
-        "SOBRE_BANDA_SUPERIOR": 1.0, "ZONA_ALTA": 0.3,
-        "ZONA_BAJA": -0.3, "BAJO_BANDA_INFERIOR": -1.0,
+        "SOBRE_BANDA_SUPERIOR": 1.0, "SOBRE_SUPERIOR": 1.0, "ZONA_ALTA": 0.3,
+        "ZONA_BAJA": -0.3, "BAJO_BANDA_INFERIOR": -1.0, "BAJO_INFERIOR": -1.0,
     }
     rsi_raw  = ind.get("rsi", 50)
     rsi_zone = 1.0 if rsi_raw > 70 else (-1.0 if rsi_raw < 30 else 0.0)
@@ -1633,19 +1633,61 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
     cur = con.cursor()
     try:
         base_where = " WHERE symbol=?" if symbol else ""
+        cond = " AND" if symbol else " WHERE"
         args = (symbol,) if symbol else ()
         total  = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}", args).fetchone()[0]
-        wins   = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='WIN'", args).fetchone()[0]
-        losses = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='LOSS'", args).fetchone()[0]
-        be     = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{' AND' if symbol else ' WHERE'} result='BE'", args).fetchone()[0]
+        wins   = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='WIN'", args).fetchone()[0]
+        losses = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='LOSS'", args).fetchone()[0]
+        be     = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='BE'", args).fetchone()[0]
         profit = cur.execute(f"SELECT COALESCE(SUM(profit),0) FROM trades{base_where}", args).fetchone()[0]
         avg_rw = cur.execute(
-            f"SELECT COALESCE(AVG(reward),0) FROM trades{base_where}{' AND' if symbol else ' WHERE'} reward IS NOT NULL",
+            f"SELECT COALESCE(AVG(reward),0) FROM trades{base_where}{cond} reward IS NOT NULL",
             args,
         ).fetchone()[0]
-        # FIX: WR = wins/(wins+losses) — BE excluido del denominador
-        # Antes: wins/total → con 38 total y 1 win daba 2.6% (falso)
-        # Ahora: wins/(wins+losses) → 1/1 = 100% (correcto)
+
+        # Avg win / avg loss / best / worst
+        avg_win_row = cur.execute(
+            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{cond} result='WIN' AND profit IS NOT NULL",
+            args,
+        ).fetchone()
+        avg_win = float(avg_win_row[0]) if avg_win_row else 0.0
+
+        avg_loss_row = cur.execute(
+            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{cond} result='LOSS' AND profit IS NOT NULL",
+            args,
+        ).fetchone()
+        avg_loss = float(avg_loss_row[0]) if avg_loss_row else 0.0
+
+        best_row = cur.execute(
+            f"SELECT COALESCE(MAX(profit),0) FROM trades{base_where}{cond} profit IS NOT NULL",
+            args,
+        ).fetchone()
+        best_trade = float(best_row[0]) if best_row else 0.0
+
+        worst_row = cur.execute(
+            f"SELECT COALESCE(MIN(profit),0) FROM trades{base_where}{cond} profit IS NOT NULL",
+            args,
+        ).fetchone()
+        worst_trade = float(worst_row[0]) if worst_row else 0.0
+
+        # Max drawdown % (running peak-to-trough on cumulative profit)
+        max_dd_pct = 0.0
+        closed_rows = cur.execute(
+            f"SELECT profit FROM trades{base_where}{cond} profit IS NOT NULL AND closed_at IS NOT NULL ORDER BY closed_at ASC",
+            args,
+        ).fetchall()
+        if closed_rows:
+            cum = 0.0
+            peak = 0.0
+            for (p,) in closed_rows:
+                cum += float(p)
+                if cum > peak:
+                    peak = cum
+                dd = peak - cum
+                if peak > 0 and (dd / peak * 100) > max_dd_pct:
+                    max_dd_pct = dd / peak * 100
+
+        # WR = wins/(wins+losses) — BE excluido del denominador
         decidable = wins + losses
         wr = (wins / decidable * 100) if decidable > 0 else 0
         return {
@@ -1654,10 +1696,17 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
             "profit": round(float(profit), 2),
             "win_rate": round(wr, 1),
             "avg_reward": round(float(avg_rw), 3),
+            "avg_win": round(avg_win, 2),
+            "avg_loss": round(avg_loss, 2),
+            "best_trade": round(best_trade, 2),
+            "worst_trade": round(worst_trade, 2),
+            "max_drawdown_pct": round(max_dd_pct, 2),
         }
     except Exception:
         return {"symbol": symbol or "ALL", "total": 0, "wins": 0, "losses": 0, "be": 0,
-                "profit": 0.0, "win_rate": 0.0, "avg_reward": 0.0}
+                "profit": 0.0, "win_rate": 0.0, "avg_reward": 0.0,
+                "avg_win": 0.0, "avg_loss": 0.0, "best_trade": 0.0, "worst_trade": 0.0,
+                "max_drawdown_pct": 0.0}
     finally:
         con.close()
 
