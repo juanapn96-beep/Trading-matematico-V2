@@ -7,6 +7,7 @@ Module-level state:
     tp_alerted    — set of tickets that received a TP-near alert
 """
 import logging
+import time
 from datetime import datetime, timezone, timedelta
 
 import MetaTrader5 as mt5
@@ -121,6 +122,15 @@ def manage_positions(positions: list, ind_cache: dict) -> None:
     acc_info = mt5.account_info()
     balance  = float(acc_info.balance) if acc_info else 0.0
 
+    # Cache pending trades once per cycle to avoid repeated DB queries
+    pending_trades_list: list = []
+    if getattr(cfg, "TIME_EXIT_ENABLED", False):
+        try:
+            pending_trades_list = get_pending_trades()
+        except Exception:
+            pending_trades_list = []
+    pending_by_ticket = {int(p["ticket"]): p for p in pending_trades_list}
+
     for pos in positions:
         ticket = pos["ticket"]
         symbol = pos["symbol"]
@@ -139,6 +149,54 @@ def manage_positions(positions: list, ind_cache: dict) -> None:
                 from modules.telegram_notifier import _send as telegram_send
                 telegram_send(f"🚨 <b>CIRCUIT BREAKER</b>\n{cb_reason}")
             continue
+
+        # ── Time-Based Exit ──────────────────────────────────────
+        if getattr(cfg, "TIME_EXIT_ENABLED", False):
+            trade_info = pending_by_ticket.get(int(ticket))
+            if trade_info and trade_info.get("opened_at"):
+                try:
+                    opened_at = datetime.fromisoformat(trade_info["opened_at"])
+                    if opened_at.tzinfo is None:
+                        opened_at = opened_at.replace(tzinfo=timezone.utc)
+                    elapsed_min = (datetime.now(timezone.utc) - opened_at).total_seconds() / 60
+
+                    # Move SL to BE if in profit and time threshold exceeded
+                    if (getattr(cfg, "TIME_EXIT_MOVE_BE_ENABLED", False)
+                            and elapsed_min >= getattr(cfg, "TIME_EXIT_MOVE_BE_MINUTES", 20)
+                            and profit > 0
+                            and ticket not in be_activated):
+                        open_p = pos["price_open"]
+                        from modules.execution import move_sl as exec_move_sl
+                        if exec_move_sl(ticket, open_p):
+                            be_activated.add(ticket)
+                            log.info(
+                                f"[time_exit] #{ticket} {symbol}: SL→BE after {elapsed_min:.0f}min "
+                                f"(profit ${profit:.2f})"
+                            )
+
+                    # Force close if max time exceeded
+                    max_minutes = getattr(cfg, "TIME_EXIT_MAX_MINUTES", 45)
+                    if elapsed_min >= max_minutes:
+                        profit_only = getattr(cfg, "TIME_EXIT_PROFIT_ONLY", False)
+                        if not profit_only or profit > 0:
+                            closed = close_position_market(pos, comment="TimeExit")
+                            if closed:
+                                state.last_action = f"⏰ Time exit #{ticket} {symbol} {elapsed_min:.0f}min"
+                                from modules.telegram_notifier import _send as telegram_send
+                                telegram_send(
+                                    "\n".join([
+                                        f"⏰ <b>TIME EXIT</b> — #{ticket} {symbol}",
+                                        f"Duración: <code>{elapsed_min:.0f}</code> min (máx {max_minutes})",
+                                        f"Profit: <code>${profit:+.2f}</code>",
+                                    ])
+                                )
+                                log.warning(
+                                    f"[time_exit] ⏰ #{ticket} {symbol} closed after "
+                                    f"{elapsed_min:.0f}min (max={max_minutes})"
+                                )
+                            continue  # Skip rest of position management for this ticket
+                except Exception as te:
+                    log.debug(f"[time_exit] Error checking time for #{ticket}: {te}")
 
         # Partial Take Profit check (before trailing stop)
         _check_partial_tp(pos)
@@ -275,13 +333,38 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
         # FIX 13: actualizar contadores — BE NO cuenta en WR
         state.daily_pnl += profit
         if result == "WIN":
-            state.wins_today   += 1
+            state.wins_today += 1
             state.trades_today += 1
+            if cfg.TILT_RESET_ON_WIN:
+                state.consecutive_losses = 0
+                state.tilt_notified = False
         elif result == "LOSS":
             state.losses_today += 1
             state.trades_today += 1
+            state.consecutive_losses += 1
+            # Activar tilt guard si se alcanza el umbral y no está ya activo
+            _tilt_now = time.time()
+            if (cfg.TILT_GUARD_ENABLED
+                    and state.consecutive_losses >= cfg.TILT_MAX_CONSECUTIVE_LOSSES
+                    and _tilt_now >= state.tilt_active_until):
+                state.tilt_active_until = _tilt_now + cfg.TILT_COOLDOWN_MINUTES * 60
+                if not state.tilt_notified:
+                    _lot_pct = int(cfg.TILT_LOT_REDUCTION_FACTOR * 100)
+                    from modules.telegram_notifier import _send as telegram_send
+                    telegram_send(
+                        "\n".join([
+                            "🛑 <b>TILT GUARD ACTIVADO</b>",
+                            "━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                            f"📉 Pérdidas consecutivas: <code>{state.consecutive_losses}</code>",
+                            f"⏸ Pausa de nuevas entradas: <code>{cfg.TILT_COOLDOWN_MINUTES}</code> minutos",
+                            f"📊 Lote reducido al <code>{_lot_pct}%</code> tras reactivación",
+                            f"⏰ Reactiva a: <code>{datetime.fromtimestamp(state.tilt_active_until, tz=timezone.utc).strftime('%H:%M:%S')} UTC</code>",
+                        ])
+                    )
+                    state.tilt_notified = True
         elif result == "BE":
             state.be_today += 1
+            # BE does NOT reset consecutive losses — it's neutral
 
         state.daily_trades_log.append({
             "symbol":    symbol,

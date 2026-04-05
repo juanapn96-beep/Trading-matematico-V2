@@ -259,6 +259,7 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
         }
 
     with state.lock:
+        _now = time.time()
         state.web_status_snapshot = {
             "updated_at": datetime.now(timezone.utc).isoformat(),
             "cycle": state.cycle_count,
@@ -279,6 +280,11 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
             "last_decision_analysis": dict(state.last_decision_analysis),
             "performance": perf_payload,
             "portfolio_risk": portfolio_payload,
+            "tilt_guard": {
+                "active": _now < state.tilt_active_until,
+                "consecutive_losses": state.consecutive_losses,
+                "remaining_minutes": max(0, int((state.tilt_active_until - _now) / 60)),
+            },
         }
 
 
@@ -407,11 +413,19 @@ def _log_session_stats():
     """
     wr  = (state.wins_today / state.trades_today * 100) if state.trades_today > 0 else 0.0
     mem = get_memory_stats()
+    _now = time.time()
+    tilt_active = _now < state.tilt_active_until
+    tilt_info = (
+        f" | 🛑 TILT({state.consecutive_losses}racha, {max(0, int((state.tilt_active_until - _now) / 60))}min)"
+        if tilt_active else
+        f" | consec_losses={state.consecutive_losses}"
+    )
     log.info(
         f"[stats] Hoy: {state.trades_today} trades reales | "
         f"✅ {state.wins_today}W ❌ {state.losses_today}L ⚡ {state.be_today}BE (excluidos) | "
         f"WR={wr:.0f}% | P&L=${state.daily_pnl:+.2f} | "
         f"Mem: {mem['total']} trades WR={mem['win_rate']}% P&L=${mem['profit']:+.2f}"
+        f"{tilt_info}"
     )
 
 

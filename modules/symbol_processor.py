@@ -714,6 +714,16 @@ def _execute_decision(
             f"(factor={warmup_factor}, trades={sym_trades})"
         )
 
+    if (cfg.TILT_GUARD_ENABLED
+            and state.consecutive_losses >= cfg.TILT_MAX_CONSECUTIVE_LOSSES):
+        tilt_factor = float(cfg.TILT_LOT_REDUCTION_FACTOR)
+        original_vol = vol
+        vol = max(0.01, round(vol * tilt_factor, 2))
+        log.info(
+            f"[tilt] {symbol}: lote reducido {original_vol} → {vol} "
+            f"(factor={tilt_factor}, consecutive_losses={state.consecutive_losses})"
+        )
+
     min_profit_usd = float(getattr(cfg, "MIN_EXPECTED_PROFIT_USD", 5.0))
     if min_profit_usd > 0 and sym_info is not None:
         _tick_val = float(getattr(sym_info, "trade_tick_value", 0) or 0)
@@ -851,6 +861,16 @@ def process_symbol(
         return
     else:
         state.equity_guard_notified.pop(symbol, None)
+
+    # ── Tilt Guard gate ──────────────────────────────────────────
+    _now_ts = time.time()
+    if cfg.TILT_GUARD_ENABLED and _now_ts < state.tilt_active_until:
+        remaining = int((state.tilt_active_until - _now_ts) / 60) + 1
+        msg = f"🛑 Tilt guard: {state.consecutive_losses} losses, pausa {remaining}min"
+        set_symbol_status(symbol, msg[:48])
+        state.last_action = f"{msg} {symbol}"
+        log.warning(f"[{symbol}] {msg}")
+        return
 
     tradeable_basic, motivo_basic = is_market_tradeable(symbol, sym_cfg)
     if not tradeable_basic:
