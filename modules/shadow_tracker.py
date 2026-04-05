@@ -138,11 +138,12 @@ def _close_shadow_position(
 
     duration_min = int((time.time() - opened_ts) / 60)
 
-    # Calcular profit en pips
+    # Calcular profit en pips (positivo = ganancia, negativo = pérdida)
     price_diff  = (exit_price - entry) if direction == "BUY" else (entry - exit_price)
-    profit_pips = price_distance_to_pips(symbol, abs(price_diff))
-    if result == "LOSS":
-        profit_pips = -abs(profit_pips)
+    signed_diff = price_diff if result == "WIN" else -abs(price_diff)
+    profit_pips = price_distance_to_pips(symbol, abs(signed_diff))
+    if signed_diff < 0:
+        profit_pips = -profit_pips
 
     close_shadow_trade(
         shadow_id=shadow_id,

@@ -2034,7 +2034,7 @@ def get_shadow_stats() -> dict:
             result["total"]           = total
             result["wins"]            = wins
             result["losses"]          = losses
-            result["win_rate"]        = round(wins / total * 100, 1) if total else 0.0
+            result["win_rate"]        = round((wins / total) * 100, 1) if total else 0.0
             result["avg_profit_pips"] = round(row[3] or 0.0, 2)
     except Exception as e:
         log.warning(f"[shadow] Error obteniendo estadísticas: {e}")
