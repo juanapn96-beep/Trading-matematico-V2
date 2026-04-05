@@ -223,19 +223,19 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
 
     # Portfolio risk snapshot
     portfolio_payload = {}
-    bot_positions = [p for p in open_positions if getattr(p, "magic", 0) == getattr(cfg, "MAGIC_NUMBER", 0)]
+    bot_positions = [p for p in open_positions if p.get("magic", 0) == cfg.MAGIC_NUMBER]
     if bot_positions:
         positions_detail = []
         for p in bot_positions:
             positions_detail.append({
-                "symbol": getattr(p, "symbol", "?"),
-                "direction": "LONG" if getattr(p, "type", 0) == 0 else "SHORT",
+                "symbol": p.get("symbol", "?"),
+                "direction": "LONG" if p.get("type", 0) == 0 else "SHORT",
             })
         from modules.portfolio_risk import _get_correlation
         corr_count = 0
         for i, p1 in enumerate(bot_positions):
             for p2 in bot_positions[i + 1:]:
-                rho = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
+                rho = _get_correlation(p1.get("symbol", ""), p2.get("symbol", ""))
                 if abs(rho) >= 0.60:
                     corr_count += 1
         risk_per = getattr(cfg, "RISK_PER_TRADE", 0.01)
@@ -245,8 +245,8 @@ def _update_web_status_snapshot(balance: float, equity: float, open_positions: l
         for i, p1 in enumerate(bot_positions):
             for j in range(i + 1, n):
                 p2       = bot_positions[j]
-                rho      = _get_correlation(getattr(p1, "symbol", ""), getattr(p2, "symbol", ""))
-                same_dir = (getattr(p1, "type", 0) == getattr(p2, "type", 0))
+                rho      = _get_correlation(p1.get("symbol", ""), p2.get("symbol", ""))
+                same_dir = (p1.get("type", 0) == p2.get("type", 0))
                 sign     = 1.0 if same_dir else -1.0
                 variance += 2 * rho * sign * risk_sq
         eff_risk = math.sqrt(max(0.0, variance)) * 100
@@ -404,6 +404,8 @@ def maybe_send_eod_analysis(balance: float, equity: float):
 
         # Resetear contadores
         state.reset_daily_stats()
+        # Set starting balance for next day's growth calculation
+        state.daily_start_balance = balance
 
 
 def _log_session_stats():
@@ -461,7 +463,10 @@ def run():
     state.daily_start_balance = balance or 0.0
 
     log.info("[calendar] 📅 Cargando calendario económico...")
-    eco_calendar.refresh(force=True)
+    try:
+        eco_calendar.refresh(force=True)
+    except Exception as e:
+        log.warning(f"[calendar] ⚠️ Error cargando calendario económico (el bot continuará sin él): {e}")
 
     mem_stats = get_memory_stats()
     notify_bot_started(balance, equity, mem_stats, list(cfg.SYMBOLS.keys()))

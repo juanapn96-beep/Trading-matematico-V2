@@ -121,11 +121,13 @@ def manage_trailing_stop(
     tp_progress = max(0.0, min(1.0, tp_progress))
 
     if scalp_mode:
+        # Default pip thresholds for scalping stages (fallback if env vars not set):
+        # Stage 1=5 pips (lock 15%), Stage 2=8 (lock 30%), Stage 3=12 (lock 50%), Stage 4=18 (lock 70%)
         stage_definitions = [
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5, "Scalp lock 70%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4, "Scalp lock 50%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3, "Scalp lock 30%"),
-            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2, "Scalp lock 15%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4", 18.0)), 0.70, 5, "Scalp lock 70%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3", 12.0)), 0.50, 4, "Scalp lock 50%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2",  8.0)), 0.30, 3, "Scalp lock 30%"),
+            (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1",  5.0)), 0.15, 2, "Scalp lock 15%"),
         ]
         lock_pct   = 0.0
         new_stage  = 1
