@@ -1633,39 +1633,39 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
     cur = con.cursor()
     try:
         base_where = " WHERE symbol=?" if symbol else ""
-        and_or_where = " AND" if symbol else " WHERE"
+        cond = " AND" if symbol else " WHERE"
         args = (symbol,) if symbol else ()
         total  = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}", args).fetchone()[0]
-        wins   = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{and_or_where} result='WIN'", args).fetchone()[0]
-        losses = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{and_or_where} result='LOSS'", args).fetchone()[0]
-        be     = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{and_or_where} result='BE'", args).fetchone()[0]
+        wins   = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='WIN'", args).fetchone()[0]
+        losses = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='LOSS'", args).fetchone()[0]
+        be     = cur.execute(f"SELECT COUNT(*) FROM trades{base_where}{cond} result='BE'", args).fetchone()[0]
         profit = cur.execute(f"SELECT COALESCE(SUM(profit),0) FROM trades{base_where}", args).fetchone()[0]
         avg_rw = cur.execute(
-            f"SELECT COALESCE(AVG(reward),0) FROM trades{base_where}{and_or_where} reward IS NOT NULL",
+            f"SELECT COALESCE(AVG(reward),0) FROM trades{base_where}{cond} reward IS NOT NULL",
             args,
         ).fetchone()[0]
 
         # Avg win / avg loss / best / worst
         avg_win_row = cur.execute(
-            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{and_or_where} result='WIN' AND profit IS NOT NULL",
+            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{cond} result='WIN' AND profit IS NOT NULL",
             args,
         ).fetchone()
         avg_win = float(avg_win_row[0]) if avg_win_row else 0.0
 
         avg_loss_row = cur.execute(
-            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{and_or_where} result='LOSS' AND profit IS NOT NULL",
+            f"SELECT COALESCE(AVG(profit),0) FROM trades{base_where}{cond} result='LOSS' AND profit IS NOT NULL",
             args,
         ).fetchone()
         avg_loss = float(avg_loss_row[0]) if avg_loss_row else 0.0
 
         best_row = cur.execute(
-            f"SELECT COALESCE(MAX(profit),0) FROM trades{base_where}{and_or_where} profit IS NOT NULL",
+            f"SELECT COALESCE(MAX(profit),0) FROM trades{base_where}{cond} profit IS NOT NULL",
             args,
         ).fetchone()
         best_trade = float(best_row[0]) if best_row else 0.0
 
         worst_row = cur.execute(
-            f"SELECT COALESCE(MIN(profit),0) FROM trades{base_where}{and_or_where} profit IS NOT NULL",
+            f"SELECT COALESCE(MIN(profit),0) FROM trades{base_where}{cond} profit IS NOT NULL",
             args,
         ).fetchone()
         worst_trade = float(worst_row[0]) if worst_row else 0.0
@@ -1673,7 +1673,7 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
         # Max drawdown % (running peak-to-trough on cumulative profit)
         max_dd_pct = 0.0
         closed_rows = cur.execute(
-            f"SELECT profit FROM trades{base_where}{and_or_where} profit IS NOT NULL AND closed_at IS NOT NULL ORDER BY closed_at ASC",
+            f"SELECT profit FROM trades{base_where}{cond} profit IS NOT NULL AND closed_at IS NOT NULL ORDER BY closed_at ASC",
             args,
         ).fetchall()
         if closed_rows:
@@ -1687,7 +1687,7 @@ def get_memory_stats(symbol: Optional[str] = None) -> dict:
                 if peak > 0 and (dd / peak * 100) > max_dd_pct:
                     max_dd_pct = dd / peak * 100
 
-        # FIX: WR = wins/(wins+losses) — BE excluido del denominador
+        # WR = wins/(wins+losses) — BE excluido del denominador
         decidable = wins + losses
         wr = (wins / decidable * 100) if decidable > 0 else 0
         return {
