@@ -66,6 +66,8 @@ class SimTrade:
     # Estado trailing interno
     _trail_stage:  int              = 0
     _be_moved:     bool             = False
+    # Modo scalping — si True usa pips-based trailing, igual que el bot real
+    scalp_mode:    bool             = False
 
 
 @dataclass
@@ -87,6 +89,31 @@ class BacktestMetrics:
     total_pips:       float  = 0.0
     period_start:     str    = ""
     period_end:       str    = ""
+
+
+# ── Pip size estimator (no MT5 needed for backtesting) ───────────
+
+def _estimate_pip_size(symbol: str) -> float:
+    """
+    Estimate pip size from symbol name — no live MT5 connection required.
+
+    Used by the backtester to convert price distances to approximate pips
+    when calculating scalp-mode trailing stages.
+
+    Rules:
+        Gold/BTC/indices with large prices  → 0.1  (1 pip = 0.1)
+        Indices like US500                  → 1.0
+        Forex pairs (4/5 decimal)           → 0.0001
+    """
+    s = symbol.upper()
+    if any(k in s for k in ("XAU", "GOLD", "BTC", "ETH", "XRP")):
+        return 0.1   # Gold/crypto: 1 pip = $0.1
+    if any(k in s for k in ("US500", "USTEC", "SPX", "NAS", "GER", "DE40", "DAX")):
+        return 1.0   # Index points
+    if any(k in s for k in ("XAG", "OIL", "WTI", "USOIL")):
+        return 0.01  # Silver/oil
+    # Default: forex 4/5 decimal place pair
+    return 0.0001
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -491,6 +518,12 @@ class Backtester:
 
         rr = get_rr(price, sl, tp)
 
+        # ── Determinar si es scalp trade (igual que _execute_decision en main.py) ─
+        is_scalp_trade = (
+            bool(getattr(cfg, "SCALPING_ONLY", False))
+            or bool(hurst < min_hurst)
+        )
+
         # ── Abrir trade simulado ──────────────────────────────────
         entry_time = bar["time"]
         if hasattr(entry_time, "to_pydatetime"):
@@ -505,6 +538,7 @@ class Backtester:
             tp=tp,
             rr_realized=rr,
             entry_bar_idx=bar_index,
+            scalp_mode=is_scalp_trade,
         )
         log.debug(
             f"[backtester] {symbol} {direction} @ {price:.5f} "
@@ -601,14 +635,15 @@ class Backtester:
 
     def _apply_trailing(self, trade: SimTrade, current_price: float) -> None:
         """
-        Trailing stop proporcional — 5 etapas igual que _manage_trailing_stop() de main.py.
+        Trailing stop dual-mode — sincronizado con _manage_trailing_stop() del bot real.
 
-        Etapas por progreso de TP:
-            <30%   → BE (no mover SL todavía)
-            >=30%  → Lock 15% del profit
-            >=50%  → Lock 35%
-            >=70%  → Lock 50%
-            >=85%  → Lock 70%
+        Modo scalping (trade.scalp_mode=True):
+            Usa pips ganados (estimados desde price_distance) y las mismas etapas
+            de config que el bot real: SCALPING_BE_PIPS_STAGE_1..4.
+
+        Modo normal (trade.scalp_mode=False):
+            Usa el progreso de TP (tp_progress) con 4 etapas fijas:
+            >=30% → Lock 15%, >=50% → Lock 35%, >=70% → Lock 50%, >=85% → Lock 70%
         """
         open_p = trade.entry_price
         sl     = trade.sl
@@ -622,37 +657,73 @@ class Backtester:
         if favorable_move <= 0:
             return
 
-        # Calcular progreso de TP
-        tp_total = abs(tp - open_p)
-        if tp_total <= 0:
-            return
-        if trade.direction == "BUY":
-            tp_remaining = max(tp - current_price, 0.0)
-        else:
-            tp_remaining = max(current_price - tp, 0.0)
-        tp_progress = max(0.0, min(1.0, 1.0 - (tp_remaining / tp_total)))
-
-        # Tabla de etapas
-        stage_defs = [
-            (0.85, 0.70),
-            (0.70, 0.50),
-            (0.50, 0.35),
-            (0.30, 0.15),
-        ]
-
-        lock_pct  = 0.0
-        new_stage = 0
-        for min_prog, pct in stage_defs:
-            if tp_progress >= min_prog:
-                lock_pct  = pct
-                new_stage = int(min_prog * 100)
-                break
-
-        if lock_pct <= 0:
-            return
-
         profit_price = abs(current_price - open_p)
-        locked       = profit_price * lock_pct
+
+        if trade.scalp_mode:
+            # ── SCALP MODE: pips-based stages ─────────────────────
+            # Estimar tamaño de pip sin MT5 (el backtester no tiene acceso en vivo)
+            pip_size    = _estimate_pip_size(trade.symbol)
+            if pip_size <= 0:
+                return
+            gained_pips = profit_price / pip_size
+
+            min_be_pips = float(getattr(cfg, "SCALPING_BE_MIN_PIPS", 2.0))
+            if gained_pips < min_be_pips:
+                return
+
+            stage_defs = [
+                (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_4")), 0.70, 5),
+                (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_3")), 0.50, 4),
+                (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_2")), 0.30, 3),
+                (float(getattr(cfg, "SCALPING_BE_PIPS_STAGE_1")), 0.15, 2),
+            ]
+
+            lock_pct  = 0.0
+            new_stage = 1
+            for min_pips, pct, stage_num in stage_defs:
+                if gained_pips >= min_pips:
+                    lock_pct  = pct
+                    new_stage = stage_num
+                    break
+
+            if lock_pct > 0:
+                locked = profit_price * lock_pct
+            else:
+                # Below minimum stage: apply small buffer above breakeven
+                be_buffer_mult = 0.5
+                locked = profit_price * be_buffer_mult
+                new_stage = 0
+
+        else:
+            # ── NORMAL MODE: TP-progress-based stages ─────────────
+            tp_total = abs(tp - open_p)
+            if tp_total <= 0:
+                return
+            if trade.direction == "BUY":
+                tp_remaining = max(tp - current_price, 0.0)
+            else:
+                tp_remaining = max(current_price - tp, 0.0)
+            tp_progress = max(0.0, min(1.0, 1.0 - (tp_remaining / tp_total)))
+
+            stage_defs = [
+                (0.85, 0.70),
+                (0.70, 0.50),
+                (0.50, 0.35),
+                (0.30, 0.15),
+            ]
+
+            lock_pct  = 0.0
+            new_stage = 0
+            for min_prog, pct in stage_defs:
+                if tp_progress >= min_prog:
+                    lock_pct  = pct
+                    new_stage = int(min_prog * 100)
+                    break
+
+            if lock_pct <= 0:
+                return
+
+            locked = profit_price * lock_pct
 
         if trade.direction == "BUY":
             new_sl = open_p + locked
