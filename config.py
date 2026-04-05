@@ -607,6 +607,30 @@ MAX_PORTFOLIO_RISK_PCT    = 5.0
 # - se envía notificación Telegram con cooldown anti-spam
 
 # ================================================================
+#  MEJORA 11 — TILT GUARD (protección anti-racha de pérdidas)
+# ================================================================
+# Tras N pérdidas consecutivas, el bot entra en modo "tilt":
+# - Pausa temporal de nuevas entradas (TILT_COOLDOWN_MINUTES)
+# - O reduce el lote al factor indicado (TILT_LOT_REDUCTION_FACTOR)
+TILT_GUARD_ENABLED           = _env_flag("TILT_GUARD_ENABLED", True)
+TILT_MAX_CONSECUTIVE_LOSSES  = int(os.environ.get("TILT_MAX_CONSECUTIVE_LOSSES", "3"))
+TILT_COOLDOWN_MINUTES        = int(os.environ.get("TILT_COOLDOWN_MINUTES", "15"))
+TILT_LOT_REDUCTION_FACTOR    = float(os.environ.get("TILT_LOT_REDUCTION_FACTOR", "0.50"))
+TILT_RESET_ON_WIN            = _env_flag("TILT_RESET_ON_WIN", True)
+
+# ================================================================
+#  MEJORA 14 — TIME-BASED EXIT (cierre por tiempo máximo)
+# ================================================================
+# Si un trade lleva más de TIME_EXIT_MAX_MINUTES abierto, se cierra.
+# Previene que trades perdedores se arrastren indefinidamente.
+TIME_EXIT_ENABLED           = _env_flag("TIME_EXIT_ENABLED", True)
+TIME_EXIT_MAX_MINUTES       = int(os.environ.get("TIME_EXIT_MAX_MINUTES", "45"))
+TIME_EXIT_PROFIT_ONLY       = _env_flag("TIME_EXIT_PROFIT_ONLY", False)
+# A los N minutos, mover SL a breakeven si el trade está en profit
+TIME_EXIT_MOVE_BE_MINUTES   = int(os.environ.get("TIME_EXIT_MOVE_BE_MINUTES", "20"))
+TIME_EXIT_MOVE_BE_ENABLED   = _env_flag("TIME_EXIT_MOVE_BE_ENABLED", True)
+
+# ================================================================
 #  FASE 9 — REAL VOLUME + COT POSITIONING
 # ================================================================
 # Volumen real de Dukascopy para pares forex (mejora Volume Profile)

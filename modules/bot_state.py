@@ -52,6 +52,11 @@ class BotState:
         self.equity_guard_notified: dict = {}
         self.daily_loss_guard_notified: float = 0.0
 
+        # ── Tilt Guard ──
+        self.consecutive_losses: int = 0
+        self.tilt_active_until: float = 0.0  # timestamp UTC when tilt expires
+        self.tilt_notified: bool = False
+
         # ── Decision engine ──
         self.decision_call_cache: dict = {}
         self.last_decision_analysis: dict = {}
@@ -105,6 +110,9 @@ class BotState:
         self.losses_today = 0
         self.be_today = 0
         self.daily_trades_log.clear()
+        self.consecutive_losses = 0
+        self.tilt_active_until = 0.0
+        self.tilt_notified = False
 
     def set_symbol_status(self, symbol: str, status: str):
         self.symbol_status_cache[symbol] = status
