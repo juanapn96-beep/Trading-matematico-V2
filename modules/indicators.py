@@ -938,8 +938,8 @@ def compute_all(df: pd.DataFrame, symbol: str, sym_cfg: dict, df_entry: pd.DataF
         ctx["fisher"]        = round(float(fish.iloc[-1]), 3)
         ctx["fisher_signal"] = round(float(fish_sig.iloc[-1]), 3)
         ctx["fisher_cross"]  = (
-            "BULLISH" if fish.iloc[-1] > fish_sig.iloc[-1] and fish.iloc[-2] <= fish_sig.iloc[-2] else
-            "BEARISH" if fish.iloc[-1] < fish_sig.iloc[-1] and fish.iloc[-2] >= fish_sig.iloc[-2] else
+            "BULL_CROSS" if fish.iloc[-1] > fish_sig.iloc[-1] and fish.iloc[-2] <= fish_sig.iloc[-2] else
+            "BEAR_CROSS" if fish.iloc[-1] < fish_sig.iloc[-1] and fish.iloc[-2] >= fish_sig.iloc[-2] else
             "NONE"
         )
 

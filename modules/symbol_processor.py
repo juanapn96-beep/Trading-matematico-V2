@@ -29,7 +29,6 @@ from modules.execution import (
 from modules.trailing_manager import (
     trail_stage, profit_candle_count, profit_candle_last_seen, init_ticket,
 )
-from modules.context_builder import build_context, build_lateral_context
 from modules.risk_manager import (
     calc_sl_tp, is_rr_valid, get_rr, is_market_tradeable,
 )
@@ -282,8 +281,11 @@ def _compute_trade_plan(
     tick = mt5.symbol_info_tick(symbol)
     if tick is None:
         return None
+    atr_val = ind.get("atr", 0)
+    if atr_val <= 0:
+        return None
     price = tick.ask if action == "BUY" else tick.bid
-    sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
+    sl, tp = calc_sl_tp(action, price, atr_val, sym_cfg)
     rr = get_rr(price, sl, tp)
     return {"action": action, "price": price, "sl": sl, "tp": tp, "rr": rr}
 
@@ -668,7 +670,7 @@ def _execute_decision(
     is_scalp_trade = bool(getattr(cfg, "SCALPING_ONLY", False)) or bool(hurst_val < min_hurst)
 
     if is_scalp_trade:
-        atr_entry    = ind.get("atr_entry", ind["atr"])
+        atr_entry    = ind.get("atr_entry", ind.get("atr", 0))
         scalp_sl_mult = float(getattr(cfg, "SCALPING_SL_ATR_MULT", 3.0))
         scalp_tp_mult = float(getattr(cfg, "SCALPING_TP_ATR_MULT", 6.0))
         if action == "BUY":
@@ -678,7 +680,7 @@ def _execute_decision(
             sl = round(price + scalp_sl_mult * atr_entry, 5)
             tp = round(price - scalp_tp_mult * atr_entry, 5)
     else:
-        sl, tp = calc_sl_tp(action, price, ind["atr"], sym_cfg)
+        sl, tp = calc_sl_tp(action, price, ind.get("atr", 0), sym_cfg)
 
     rr     = get_rr(price, sl, tp)
     min_rr = _get_entry_min_rr(sym_cfg)
@@ -794,7 +796,7 @@ def _execute_decision(
         from modules.telegram_notifier import telegram_send
         shadow_id = open_shadow_trade(
             symbol=symbol, direction=action, entry_price=price,
-            sl=sl, tp=tp, volume=vol, score=score, reason=reason,
+            sl=sl, tp=tp, volume=vol, score=decision.get("score", 0.0), reason=reason,
             ind=ind,
         )
         log.info(
@@ -891,7 +893,7 @@ def _execute_decision(
 
     notify_trade_opened(
         symbol=symbol, direction=action, price=price, sl=sl, tp=tp,
-        volume=vol, atr=ind["atr"], rr=rr, reason=reason,
+        volume=vol, atr=ind.get("atr", 0), rr=rr, reason=reason,
         ind=ind, hilbert=hilbert,
         hurst=ind.get("hurst", 0.5),
         fisher=ind.get("fisher", 0),
