@@ -109,8 +109,9 @@ def _compute_rolling_correlation(sym_a: str, sym_b: str) -> Optional[float]:
         return None
 
     # Align by timestamp — use only matching candles
-    times_a = {r[0]: r[4] for r in rates_a}  # timestamp: close
-    times_b = {r[0]: r[4] for r in rates_b}
+    # MT5 structured arrays: field 'time' = timestamp, field 'close' = close price
+    times_a = {r['time']: r['close'] for r in rates_a}
+    times_b = {r['time']: r['close'] for r in rates_b}
 
     common_times = sorted(set(times_a.keys()) & set(times_b.keys()))
     if len(common_times) < window:

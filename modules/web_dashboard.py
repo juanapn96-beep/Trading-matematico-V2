@@ -1204,13 +1204,13 @@ HTML_TEMPLATE = """
         }
 
         // ── Duration stats ───────────────────────────────────────
-        const fmt = v => v != null && v > 0 ? `${v} min` : '—';
+        const fmt = v => v != null && v >= 0 ? `${v} min` : '—';
         setText('avgDuration',    fmt(data.avg_duration_min));
         setText('avgDurationWin', fmt(data.avg_duration_winners));
         setText('avgDurationLoss',fmt(data.avg_duration_losers));
 
         // ── Score stats ──────────────────────────────────────────
-        const fmtScore = v => v != null && v > 0 ? String(v) : '—';
+        const fmtScore = v => v != null ? String(v) : '—';
         setText('scoreWinners', fmtScore(data.score_winners_avg));
         setText('scoreLosers',  fmtScore(data.score_losers_avg));
 
