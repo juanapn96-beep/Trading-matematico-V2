@@ -278,14 +278,29 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
             if pid not in closing_deals or d.time > closing_deals[pid].time:
                 closing_deals[pid] = d
 
+    max_retries  = int(getattr(cfg, "CLOSURE_MAX_RETRIES", 10) or 10)
+    warn_every_n = int(getattr(cfg, "CLOSURE_WARN_EVERY_N", 3) or 3)
+
     unresolved_tickets = set()
     for ticket in closed:
         state.trade_mode_cache.pop(ticket, None)
 
         deal = closing_deals.get(ticket)
+
+        # Secondary scan: closing_deals is indexed by the most-recent entry==1 deal.
+        # Some partial-close sequences or entry==3 (reverse) deals are not indexed there;
+        # scan linearly to catch them.
         if deal is None:
             for d in history:
                 if int(d.position_id) == ticket and d.entry in (1, 3):
+                    deal = d
+                    if d.entry == 1:
+                        break
+
+        # Fallback: some brokers link the closing deal by order ticket instead of position_id
+        if deal is None:
+            for d in history:
+                if int(getattr(d, 'order', 0) or 0) == ticket and d.entry in (1, 3):
                     deal = d
                     if d.entry == 1:
                         break
@@ -298,12 +313,22 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
                     f"(posiblemente abierto externamente) — ignorando"
                 )
             else:
-                log.warning(
-                    f"[closures] No se encontró deal de cierre para ticket #{ticket} "
-                    f"(revisados {len(history)} deals desde "
-                    f"{from_time.strftime('%Y-%m-%d %H:%M')} UTC)"
-                )
-                unresolved_tickets.add(ticket)
+                attempt = state.closure_retry_counts.get(ticket, 0) + 1
+                state.closure_retry_counts[ticket] = attempt
+                if attempt >= max_retries:
+                    log.error(
+                        f"[closures] Ticket #{ticket} no reconciliado tras {attempt} intentos "
+                        f"— descartando para evitar spam (revisados {len(history)} deals)"
+                    )
+                    state.closure_retry_counts.pop(ticket, None)
+                else:
+                    if attempt == 1 or attempt % warn_every_n == 0:
+                        log.warning(
+                            f"[closures] No se encontró deal de cierre para ticket #{ticket} "
+                            f"(intento {attempt}/{max_retries}, revisados {len(history)} deals desde "
+                            f"{from_time.strftime('%Y-%m-%d %H:%M')} UTC)"
+                        )
+                    unresolved_tickets.add(ticket)
             continue
 
         profit  = (
@@ -417,5 +442,6 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
         tp_alerted.discard(ticket)
         _partial_tp_done.discard(ticket)
         state.tickets_en_memoria.discard(ticket)
+        state.closure_retry_counts.pop(ticket, None)
 
     return unresolved_tickets

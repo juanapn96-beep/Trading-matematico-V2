@@ -141,6 +141,10 @@ MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "2.0"
 SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
 SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
+# Max retry attempts per unresolved ticket before giving up closure reconciliation
+CLOSURE_MAX_RETRIES  = int(os.environ.get("CLOSURE_MAX_RETRIES", "10") or 10)
+# Only emit the "no deal found" warning on attempt 1 and every Nth attempt thereafter
+CLOSURE_WARN_EVERY_N = int(os.environ.get("CLOSURE_WARN_EVERY_N", "3") or 3)
 
 # ================================================================
 #  TELEGRAM

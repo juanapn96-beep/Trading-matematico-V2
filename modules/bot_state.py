@@ -16,6 +16,7 @@ class BotState:
         # ── Trade tracking ──
         self.tickets_en_memoria: set = set()
         self.pending_closure_tickets: set = set()
+        self.closure_retry_counts: dict = {}  # ticket -> number of reconciliation attempts
         self.last_trade_time: dict = {}
         self.trade_mode_cache: dict = {}
 
@@ -101,6 +102,7 @@ class BotState:
         self.trade_mode_cache.pop(ticket, None)
         self.tickets_en_memoria.discard(ticket)
         self.pending_closure_tickets.discard(ticket)
+        self.closure_retry_counts.pop(ticket, None)
 
     def reset_daily_stats(self):
         """Called at EOD to reset daily counters."""
