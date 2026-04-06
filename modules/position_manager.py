@@ -291,8 +291,19 @@ def watch_closures(open_tickets_before: set, open_positions_now: list) -> set:
                         break
 
         if deal is None:
-            log.warning(f"[closures] No se encontró deal de cierre para ticket #{ticket}")
-            unresolved_tickets.add(ticket)
+            if int(ticket) not in pending_by_ticket:
+                # Position not opened by this bot (external trade) — discard silently.
+                log.debug(
+                    f"[closures] Ticket #{ticket} cerrado sin registro interno "
+                    f"(posiblemente abierto externamente) — ignorando"
+                )
+            else:
+                log.warning(
+                    f"[closures] No se encontró deal de cierre para ticket #{ticket} "
+                    f"(revisados {len(history)} deals desde "
+                    f"{from_time.strftime('%Y-%m-%d %H:%M')} UTC)"
+                )
+                unresolved_tickets.add(ticket)
             continue
 
         profit  = (

@@ -18,14 +18,28 @@ _EMERGENCY_CLOSE_DEVIATION = 50
 
 
 def _get_filling_type(symbol: str) -> int:
-    """Auto-detect the filling mode supported by the symbol."""
-    sym_info = mt5.symbol_info(symbol)
-    if sym_info is not None:
-        fm = sym_info.filling_mode
-        if fm & mt5.SYMBOL_FILLING_IOC:
-            return mt5.ORDER_FILLING_IOC
-        if fm & mt5.SYMBOL_FILLING_FOK:
-            return mt5.ORDER_FILLING_FOK
+    """Auto-detect the filling mode supported by the symbol.
+
+    symbol_info.filling_mode is a bitmask: bit-0 (1) = FOK, bit-1 (2) = IOC.
+    The MetaTrader5 Python wrapper does not expose SYMBOL_FILLING_* constants;
+    numeric fallbacks are used for portability across wrapper versions.
+    """
+    # Bitmask constants for symbol_info.filling_mode (not exposed by Python wrapper)
+    _SYM_FOK = getattr(mt5, "SYMBOL_FILLING_FOK", 1)
+    _SYM_IOC = getattr(mt5, "SYMBOL_FILLING_IOC", 2)
+    try:
+        sym_info = mt5.symbol_info(symbol)
+        if sym_info is not None:
+            fm = sym_info.filling_mode
+            if fm & _SYM_IOC:
+                return mt5.ORDER_FILLING_IOC
+            if fm & _SYM_FOK:
+                return mt5.ORDER_FILLING_FOK
+    except Exception as exc:
+        log.warning(
+            f"[filling] Error detectando filling mode para {symbol}: {exc}"
+            " — usando ORDER_FILLING_RETURN como fallback"
+        )
     return mt5.ORDER_FILLING_RETURN
 
 # ── TF Map MT5 ───────────────────────────────────────────────────

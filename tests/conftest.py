@@ -37,7 +37,9 @@ if "MetaTrader5" not in sys.modules:
     _mt5_mock.TRADE_ACTION_DEAL  = 1
     _mt5_mock.TRADE_ACTION_SLTP  = 6
     _mt5_mock.ORDER_TIME_GTC     = 1
-    _mt5_mock.ORDER_FILLING_IOC  = 1
+    _mt5_mock.ORDER_FILLING_FOK    = 0
+    _mt5_mock.ORDER_FILLING_IOC    = 1
+    _mt5_mock.ORDER_FILLING_RETURN = 2
     _mt5_mock.TRADE_RETCODE_DONE = 10009
     for _attr in ("initialize", "login", "account_info", "symbol_info", "symbol_info_tick",
                   "positions_get", "order_send", "copy_rates_from_pos",
