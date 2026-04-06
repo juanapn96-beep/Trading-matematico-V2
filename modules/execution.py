@@ -38,7 +38,7 @@ def _get_filling_type(symbol: str) -> int:
     except Exception as exc:
         log.warning(
             f"[filling] Error detectando filling mode para {symbol}: {exc}"
-            f" — usando ORDER_FILLING_RETURN como fallback"
+            " — usando ORDER_FILLING_RETURN como fallback"
         )
     return mt5.ORDER_FILLING_RETURN
 
