@@ -254,17 +254,31 @@ def deterministic_decision(
         score -= hurst_penalty
         reasons.append(f"hurst_pen=-{hurst_penalty:.1f}")
 
-    # min_decision_score: minimum score to open a trade (default 5.0 out of max 10.0).
-    # Lower to 4.0 for more aggressive scalping; raise to 6.0 for higher quality signals.
-    min_score = sym_cfg.get("min_decision_score", 5.0)
+    # min_decision_score: minimum score to open a trade (default 4.5 for conservative scalping).
+    # Each symbol in config.py can override this via "min_decision_score".
+    min_score = sym_cfg.get("min_decision_score", 4.5)
 
-    # Ajuste por calidad de sesión: subir el umbral fuera de sesión óptima
+    # Session quality: hard block for dead sessions; soft additive penalty otherwise.
+    #
+    # PREVIOUS BEHAVIOUR (removed): min_score = min_score / session_q
+    #   This was too punitive for live scalping. With session_q=0.3 and min_score=4.0,
+    #   the effective threshold became 13.3. With session_q=0.2 it hit 20.0 — making it
+    #   virtually impossible to trade outside the best London/NY windows, even with a
+    #   solid 6-7 point setup. The bot ended up stuck in HOLD all session.
+    #
+    # NEW BEHAVIOUR: soft additive penalty capped at +0.5 points.
+    #   session_q=0.5 → min_score += 0.25   (typical asian session)
+    #   session_q=0.3 → min_score += 0.35   (late/dead-ish)
+    #   session_q=1.0 → min_score unchanged  (peak London/NY)
+    #   This keeps thresholds sane at all times while still discouraging low-quality hours.
     session_q = _get_session_quality(sym_cfg)
     if session_q <= 0:
         return {"decision": "HOLD", "confidence": 1, "reason": "session_q=0 (dead session)", "score": 0.0}
     if session_q < 1.0:
-        min_score = min_score / session_q
-        reasons.append(f"session_q={session_q:.1f}")
+        # Soft penalty: at worst +0.35 (session_q≈0.3) — never explodes like a divisor.
+        session_penalty = round((1.0 - session_q) * 0.5, 2)
+        min_score = min_score + session_penalty
+        reasons.append(f"session_q={session_q:.1f}(+{session_penalty:.2f})")
 
     confidence = max(1, min(10, int(score)))
     reason_str = " | ".join(reasons)
