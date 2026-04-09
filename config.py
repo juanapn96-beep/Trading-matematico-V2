@@ -1,37 +1,19 @@
 """
 ╔══════════════════════════════════════════════════════════════════════════╗
-║   ZAR ULTIMATE BOT v7 — config.py  (v7.0 — SCALPING PURO 5 SÍMBOLOS) ║
+║   ZAR ULTIMATE BOT v8 — config.py  (v8.0 — LONG-TERM 20 SÍMBOLOS)    ║
 ║                                                                          ║
-║   CAMBIOS v6.8:                                                         ║
-║   • TP asimétrico por dirección: tp_atr_mult_buy / tp_atr_mult_sell   ║
-║   • BUY → TP largo | SELL → TP corto (ratio ~0.6× del BUY)            ║
-║   • calc_sl_tp en risk_manager.py actualizado con fallback             ║
-║     retrocompatible a tp_atr_mult si los nuevos campos no existen      ║
-║                                                                          ║
-║   CAMBIOS v6.7:                                                         ║
-║   • Servidor MT5 cambiado a ICMarketsSC-MT5-2 (default)               ║
-║   • ALPHA_VANTAGE_KEY y FINNHUB_KEY ahora opcionales (no bloquean)    ║
-║   • US30 añadido a _NO_SUFFIX (índice sin sufijo de broker)            ║
-║   • 8 nuevos símbolos TIER 1 IC Markets (13-20):                      ║
-║     AUDUSD, USDCAD, USDCHF, NZDUSD, EURGBP, AUDJPY, ETHUSD, US30    ║
-║   • Total: 12 → 20 activos                                             ║
-║                                                                          ║
-║   CAMBIOS v6.6:                                                         ║
-║   • FIX CRÍTICO: Warmup ya no bloquea RANGING/MIXED/VOLATILE          ║
-║   • should_block inicializado correctamente (evita UnboundLocalError)  ║
-║   • XAGUSD memory_min_trades: 4→8, block_threshold: 0.88→0.92        ║
-║   • EURUSD/XTIUSD memory_min_trades subido para estrategias rango     ║
-║   • US500/USTEC/DE40 memory_min_trades: 4→6 (índices en MIXED)       ║
-║   • WARMUP_TRADE_COUNT default: 100→50 (menos bloqueos en arranque)  ║
-║                                                                          ║
-║   CAMBIOS v6.5:                                                         ║
-║   • FASE 0: Credenciales migradas a .env (python-dotenv)               ║
-║   • BREAKEVEN_ATR_MULT: BE por ATR en vez de pips fijos                ║
-║   • SYMBOL_COOLDOWN_SEC: cooldown entre trades del mismo símbolo       ║
-║   • US500 min_hurst: 0.45→0.38 (índices operan con Hurst bajo)       ║
-║   • XAGUSD min_hurst: 0.38→0.35 (casi siempre bajo el umbral)        ║
-║   • USOIL min_hurst: 0.42→0.38                                        ║
-║   • be_atr_mult por símbolo (personalizable)                           ║
+║   CAMBIOS v8.0 (RESTRUCTURACIÓN COMPLETA):                             ║
+║   • Volver a 20 símbolos diversificados (forex, commodities, indices,  ║
+║     crypto) — más oportunidades y mejor diversificación                ║
+║   • Timeframes: H1 (entrada) + H4 (tendencia) — señales más fiables   ║
+║   • SCALPING_ONLY desactivado — modo long-term / swing trading         ║
+║   • Risk per trade: 1% (conservador para recuperar cuenta)             ║
+║   • Neural Brain DESACTIVADO — reset limpio, recopilar datos nuevos    ║
+║   • Scorecard y Policy Engine DESACTIVADOS — sin bloqueos historicos   ║
+║   • Indicadores simplificados: RSI, MACD, SuperTrend, Kalman, ATR,    ║
+║     Hurst (régimen), S/R Zones. Sin Hilbert/Fisher/Fourier/ADF/ZScore  ║
+║   • Decision Engine simplificado con umbral 4.0/6.0                    ║
+║   • Trailing stop: 3 etapas en vez de 5                                ║
 ╚══════════════════════════════════════════════════════════════════════════╝
 """
 
@@ -101,49 +83,31 @@ _NO_SUFFIX = {"USTEC", "DE40", "US30"}
 # ================================================================
 #  MOTOR DE DECISIÓN DETERMINISTA (sin LLM)
 # ================================================================
-# FIX: 120→45s — cooldown de decisión más agresivo para scalping M1 sniper.
-DECISION_SYMBOL_COOLDOWN_SEC = int(os.environ.get("DECISION_SYMBOL_COOLDOWN_SEC", "45") or 45)
+# v8.0: Cooldown de 120s para long-term H1 — no necesitamos ser agresivos.
+DECISION_SYMBOL_COOLDOWN_SEC = int(os.environ.get("DECISION_SYMBOL_COOLDOWN_SEC", "120") or 120)
 DECISION_MIN_ENTRY_QUALITY   = int(os.environ.get("DECISION_MIN_ENTRY_QUALITY", "3") or 3)
 DECISION_ENTRY_STRONG_ONLY   = _env_flag("DECISION_ENTRY_STRONG_ONLY", True)
 DECISION_ENTRY_CONF_MULT     = float(os.environ.get("DECISION_ENTRY_CONF_MULT", "2.0") or 2.0)
 ENTRY_MIN_RR             = float(os.environ.get("ENTRY_MIN_RR", "1.50") or 1.50)
-# Cuando es True, todos los trades se tratan como scalping (breakeven por pips, TP reducido).
-SCALPING_ONLY            = _env_flag("SCALPING_ONLY", True)
-SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", True)
-# FIX: 0.18→0.25 — Hurst < 0.25 es prácticamente random walk; no operar.
+# v8.0: SCALPING DESACTIVADO — modo long-term / swing trading con H1/H4.
+SCALPING_ONLY            = _env_flag("SCALPING_ONLY", False)
+SCALPING_ALLOW_LOW_HURST = _env_flag("SCALPING_ALLOW_LOW_HURST", False)
 SCALPING_HURST_HARD_FLOOR = float(os.environ.get("SCALPING_HURST_HARD_FLOOR", "0.25") or 0.25)
 SCALPING_HURST_SOFT_MARGIN = float(os.environ.get("SCALPING_HURST_SOFT_MARGIN", "0.20") or 0.20)
-# FIX v7.0: 0.82→0.98 — SELL con TP_MULT=0.82 destruía el R:R en casi todos los SELL.
-# Ejemplo con EURUSD SELL (sl=1.5×ATR, tp_sell=3.0×ATR):
-#   R:R base = 3.0/1.5 = 2.00 → tras mult 0.82: 2.00×0.82=1.64 (pasa)
-#   Pero con el antiguo tp_atr_mult_sell=1.8 y ENTRY_MIN_RR=1.20:
-#   R:R base = 1.8/1.5 = 1.20 → tras mult 0.82: 1.20×0.82=0.984 < 1.20 → BLOQUEADO
-# Con 0.98 y TP simétrico el R:R efectivo es 1.96, superando holgadamente el mín 1.50.
-SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "0.98") or 0.98)
-# FIX v7.0: etapas de trail escaladas — 2→5 pips mínimos antes de mover SL.
-# Evita que el trail se active en ruido de mercado (spread + 1 pip) y cierre
-# ganancias de $0.10 en vez de $5+.
+SCALPING_TP_MULT = float(os.environ.get("SCALPING_TP_MULT", "1.00") or 1.00)
+# Etapas de trail para referencia (no activas en modo long-term)
 SCALPING_BE_PIPS_STAGE_1 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_1",  "5.0") or  5.0)
 SCALPING_BE_PIPS_STAGE_2 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_2",  "8.0") or  8.0)
 SCALPING_BE_PIPS_STAGE_3 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_3", "12.0") or 12.0)
 SCALPING_BE_PIPS_STAGE_4 = float(os.environ.get("SCALPING_BE_PIPS_STAGE_4", "18.0") or 18.0)
 SCALPING_BE_MIN_PIPS     = float(os.environ.get("SCALPING_BE_MIN_PIPS",      "5.0") or  5.0)
-# Ganancia mínima esperada en USD para abrir una operación.
-# Si el lot size + TP calculado no pueden generar al menos este importe, se descarta.
-# Esto evita trades de $0.50 que no justifican el riesgo ni el spread.
-# FIX: 5.0→2.0 — umbral más bajo para capturar más oportunidades sniper rápidas.
-# Con $2 el lot×TP sigue justificando el riesgo en cuentas desde $500.
-MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "2.0") or 2.0)
-# ── SCALPING: SL/TP proporcionales al ATR del TF de entrada ──
-# Cuando SCALPING_ONLY=True, se usa atr_entry (ATR M1/M5) en vez de ATR H1
-# para calcular SL y TP. Esto hace que los stops sean proporcionales al
-# movimiento real del timeframe en que se opera.
+# v8.0: Ganancia mínima $3 — más holgado en long-term con movimientos mayores.
+MIN_EXPECTED_PROFIT_USD  = float(os.environ.get("MIN_EXPECTED_PROFIT_USD", "3.0") or 3.0)
+# Scalping ATR mults (referencia, no activas con SCALPING_ONLY=False)
 SCALPING_SL_ATR_MULT = float(os.environ.get("SCALPING_SL_ATR_MULT", "3.0") or 3.0)
 SCALPING_TP_ATR_MULT = float(os.environ.get("SCALPING_TP_ATR_MULT", "6.0") or 6.0)
 CLOSURE_HISTORY_LOOKBACK_DAYS = int(os.environ.get("CLOSURE_HISTORY_LOOKBACK_DAYS", "30") or 30)
-# Max retry attempts per unresolved ticket before giving up closure reconciliation
 CLOSURE_MAX_RETRIES  = int(os.environ.get("CLOSURE_MAX_RETRIES", "10") or 10)
-# Only emit the "no deal found" warning on attempt 1 and every Nth attempt thereafter
 CLOSURE_WARN_EVERY_N = int(os.environ.get("CLOSURE_WARN_EVERY_N", "3") or 3)
 
 # ================================================================
@@ -167,242 +131,433 @@ def _sym(base: str) -> str:
 
 
 # ================================================================
-#  SÍMBOLOS — 5 ACTIVOS DE ALTA LIQUIDEZ, SCALPING PURO 24/5
+#  SÍMBOLOS — 20 ACTIVOS DIVERSIFICADOS, LONG-TERM H1/H4
 #
-#  FIX v7.0: Reducido de 20 a 5 símbolos para concentrar capital y
-#  señales. TP simétrico (tp_atr_mult_buy == tp_atr_mult_sell) para
-#  eliminar el sesgo BUY que generaba el TP asimétrico previo.
-#  R:R mínimo ≥ 1.67 en todos los pares (con SCALPING_TP_MULT=0.98).
+#  v8.0: Restaurados los 20 símbolos originales de v6.7 con ajustes
+#  para timeframes H1/H4. Cada símbolo incluye:
+#  - max_spread_pips: filtro duro de spread
+#  - session_quality: factor por sesión horaria
+#  - min_decision_score: umbral de score para entrar (4.0 default)
+#  - sr_timeframes y tf_weights actualizados para H1/H4/D1
 # ================================================================
 SYMBOLS = {
 
-    # ── 1. ORO — 24/5, mejor scalping activo ─────────────────────
+    # ── 1. ORO — 24/5 ──────────────────────────────────────────
     _sym("XAUUSD"): {
         "name":           "Oro (Gold)",
         "currencies":     ["USD"],
         "strategy_type":  "VOLATILITY_CYCLE",
         "strategy_extra_rules": (
-            "ESTRATEGIA SCALPING VOLATILITY_CYCLE — ORO (XAUUSD):\n"
-            "- Opera 24/5. Modo SCALPING PURO en M1. Objetivo: $5-30 USD/trade.\n"
-            "- Sesión americana (13-21 UTC): máxima volatilidad — mejores scalps.\n"
-            "- LOCAL_MIN en Hilbert M1 = señal BUY de alta probabilidad.\n"
-            "- LOCAL_MAX en Hilbert M1 = señal SELL de alta probabilidad.\n"
-            "- Fisher < -2.0 con precio en soporte → BUY scalp fuerte.\n"
-            "- Fisher > +2.0 con precio en resistencia → SELL scalp fuerte.\n"
-            "- TP SIMÉTRICO: misma distancia en BUY y SELL (sin sesgo de dirección).\n"
-            "- HOLD si Kalman H1 + SuperTrend H1 ambos contradicen la dirección.\n"
-            "- HOLD si noticias de alto impacto en próximos 30 min.\n"
-            "- NUNCA abrir contra tendencia fuerte sin señal Hilbert extrema."
+            "ORO (XAUUSD) — LONG-TERM H1/H4:\n"
+            "- Opera 24/5. Sesión americana (13-21 UTC): máxima volatilidad.\n"
+            "- Seguir tendencia con MACD + SuperTrend + Kalman en H1.\n"
+            "- H4 confirma dirección. S/R en H4/D1 son los niveles clave.\n"
+            "- Refugio: en risk-off global sube fuerte."
         ),
         "session_start":  0,
         "session_end":    24,
-        "max_spread_pips": 5.0,    # Oro: spread natural más alto
-        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
-            "asian":  0.6,         # 0-7 UTC
-            "london": 1.0,         # 7-13 UTC
-            "ny":     1.0,         # 13-21 UTC
-            "dead":   0.3,         # 21-24 UTC
-        },
+        "max_spread_pips": 5.0,
+        "session_quality": {"asian": 0.6, "london": 1.0, "ny": 1.0, "dead": 0.3},
         "sl_atr_mult":    2.0,
-        "tp_atr_mult_buy":  3.5,
-        "tp_atr_mult_sell": 3.5,   # TP simétrico — R:R = 1.75
-        "be_atr_mult":    2.0,
+        "tp_atr_mult":    4.0,
+        "be_atr_mult":    2.8,
         "rsi_oversold":   30,
         "rsi_overbought": 70,
         "min_confidence": 6,
-        "min_decision_score": 4.5,
-        "min_hurst":      0.35,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.42,
         "sr_tolerance_pct": 0.40,
-        "sr_lookback":    100,
-        "sr_timeframes":  ["M5", "M15", "H1"],
-        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
+        "sr_lookback":    150,
+        "sr_timeframes":  ["H1", "H4", "D1"],
+        "tf_weights":     {"H1": 1, "H4": 3, "D1": 4},
         "atr_norm_factor":  30.0,
-        "price_scale":    2500.0,
+        "price_scale":    5000.0,
         "news_topics":    "economy_monetary,economy_macro,finance,forex",
         "memory_min_trades":      5,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
-        "memory_decay_days":      30,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      45,
     },
 
-    # ── 2. EUR/USD — 24/5, par más líquido del mundo ─────────────
-    _sym("EURUSD"): {
-        "name":           "Euro / Dólar",
-        "currencies":     ["EUR", "USD"],
-        "strategy_type":  "CYCLE_REVERSION",
-        "strategy_extra_rules": (
-            "ESTRATEGIA SCALPING CYCLE_REVERSION — EURUSD:\n"
-            "- Opera 24/5. Modo SCALPING PURO en M1. Objetivo: $5-20 USD/trade.\n"
-            "- Sesión europea (07-17 UTC): mayor liquidez y precisión de señales.\n"
-            "- Reversiones desde S/R con confirmación de ciclo Hilbert extremo.\n"
-            "- LOCAL_MIN en soporte S/R → BUY scalp óptimo.\n"
-            "- LOCAL_MAX en resistencia S/R → SELL scalp óptimo.\n"
-            "- Fisher extremo (>2.0 o <-2.0): señal de reversión muy confiable.\n"
-            "- TP SIMÉTRICO — R:R = 2.0, igualmente válido para BUY y SELL.\n"
-            "- ECB y Fed: el calendario pausará automáticamente."
-        ),
-        "session_start":  0,
-        "session_end":    24,
-        "max_spread_pips": 2.0,    # EUR/USD: par más líquido, spread bajo
-        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
-            "asian":  0.3,         # 0-7 UTC
-            "london": 1.0,         # 7-13 UTC
-            "ny":     0.8,         # 13-21 UTC
-            "dead":   0.2,         # 21-24 UTC
-        },
-        "sl_atr_mult":    1.5,
-        "tp_atr_mult_buy":  3.0,
-        "tp_atr_mult_sell": 3.0,   # TP simétrico — R:R = 2.0
-        "be_atr_mult":    1.8,
-        "rsi_oversold":   30,
-        "rsi_overbought": 70,
-        "min_confidence": 6,
-        "min_decision_score": 4.0,
-        "min_hurst":      0.35,
-        "sr_tolerance_pct": 0.10,
-        "sr_lookback":    100,
-        "sr_timeframes":  ["M5", "M15", "H1"],
-        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
-        "atr_norm_factor":  0.0015,
-        "price_scale":    1.10,
-        "news_topics":    "economy_monetary,forex,economy_macro",
-        "memory_min_trades":      5,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
-        "memory_decay_days":      25,
-    },
-
-    # ── 3. GBP/USD — 24/5, alta volatilidad para scalping ────────
-    _sym("GBPUSD"): {
-        "name":           "Libra / Dólar (Cable)",
-        "currencies":     ["GBP", "USD"],
-        "strategy_type":  "MOMENTUM_SURGE",
-        "strategy_extra_rules": (
-            "ESTRATEGIA SCALPING MOMENTUM_SURGE — GBPUSD (Cable):\n"
-            "- Opera 24/5. Modo SCALPING PURO en M1. Objetivo: $5-30 USD/trade.\n"
-            "- Mejor hora: 7-12 UTC (Frankfurt-Londres apertura). El Cable se mueve 3+ pips/min.\n"
-            "- MACD acelerando + HA 2+ velas consecutivas + Kalman alineado = entrada óptima.\n"
-            "- Fisher extremo (>2.0 o <-2.0) es señal de reversión muy confiable en GBP.\n"
-            "- TP SIMÉTRICO — R:R = 1.75, válido para BUY y SELL por igual.\n"
-            "- BOE y UK CPI: el calendario pausará automáticamente.\n"
-            "- HOLD si spread > 2.5 pips."
-        ),
-        "session_start":  0,
-        "session_end":    24,
-        "max_spread_pips": 3.0,    # GBP/USD: spreads moderados en Cable
-        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
-            "asian":  0.2,         # 0-7 UTC
-            "london": 1.0,         # 7-13 UTC
-            "ny":     0.7,         # 13-21 UTC
-            "dead":   0.2,         # 21-24 UTC
-        },
-        "sl_atr_mult":    2.0,
-        "tp_atr_mult_buy":  3.5,
-        "tp_atr_mult_sell": 3.5,   # TP simétrico — R:R = 1.75
-        "be_atr_mult":    2.0,
-        "rsi_oversold":   30,
-        "rsi_overbought": 70,
-        "min_confidence": 6,
-        "min_decision_score": 4.0,
-        "min_hurst":      0.35,
-        "sr_tolerance_pct": 0.12,
-        "sr_lookback":    100,
-        "sr_timeframes":  ["M5", "M15", "H1"],
-        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
-        "atr_norm_factor":  0.0015,
-        "price_scale":    1.27,
-        "news_topics":    "economy_monetary,forex,economy_macro",
-        "memory_min_trades":      5,
-        "memory_block_threshold": 0.88,
-        "memory_warn_threshold":  0.78,
-        "memory_decay_days":      25,
-    },
-
-    # ── 4. S&P 500 — sesión americana, alta volatilidad ──────────
+    # ── 2. S&P 500 ─────────────────────────────────────────────
     _sym("US500"): {
         "name":           "S&P 500",
         "currencies":     ["USD"],
         "strategy_type":  "MOMENTUM_TREND",
         "strategy_extra_rules": (
-            "ESTRATEGIA SCALPING MOMENTUM_TREND — S&P 500 (US500):\n"
-            "- Opera casi 24h como CFD. Modo SCALPING PURO en M1. Objetivo: $5-40 USD/trade.\n"
-            "- Sesión americana (13-21 UTC): máxima calidad de señal — priorizar esta ventana.\n"
-            "- Pre-market (11-13 UTC): movimiento real, señales válidas con cautela extra.\n"
-            "- El filtro ATR bloqueará automáticamente las horas sin movimiento suficiente.\n"
-            "- MACD + SuperTrend + Kalman — los 3 deben confirmar para entrar.\n"
-            "- Hurst en índices es naturalmente 0.35-0.45 — normal y esperable.\n"
-            "- TP SIMÉTRICO — R:R = 1.67, BUY y SELL igualmente válidos.\n"
+            "S&P 500 (US500) — LONG-TERM H1/H4:\n"
+            "- Opera ~24h como CFD. Sesión americana 13-21 UTC máxima calidad.\n"
+            "- MACD + SuperTrend + Kalman confirman dirección.\n"
+            "- Hurst en índices es naturalmente 0.35-0.45 — normal.\n"
             "- NFP/CPI/FOMC: el calendario pausará automáticamente."
         ),
         "session_start":  0,
         "session_end":    24,
-        "max_spread_pips": 4.0,    # S&P 500: CFD índice, spread variable
-        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
-            "asian":  0.3,         # 0-7 UTC
-            "london": 0.5,         # 7-13 UTC
-            "ny":     1.0,         # 13-21 UTC
-            "dead":   0.2,         # 21-24 UTC
-        },
-        "sl_atr_mult":    1.8,
-        "tp_atr_mult_buy":  3.0,
-        "tp_atr_mult_sell": 3.0,   # TP simétrico — R:R = 1.67
-        "be_atr_mult":    2.0,
+        "max_spread_pips": 4.0,
+        "session_quality": {"asian": 0.3, "london": 0.5, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    1.6,
+        "tp_atr_mult":    3.2,
+        "be_atr_mult":    2.3,
         "rsi_oversold":   35,
         "rsi_overbought": 65,
         "min_confidence": 6,
-        "min_decision_score": 4.5,
-        "min_hurst":      0.35,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
         "sr_tolerance_pct": 0.25,
-        "sr_lookback":    100,
-        "sr_timeframes":  ["M5", "M15", "H1"],
-        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 4},
         "atr_norm_factor":  20.0,
-        "price_scale":    5000.0,
+        "price_scale":    5500.0,
         "news_topics":    "economy_monetary,economy_macro,finance,earnings",
-        "memory_min_trades":      5,
-        "memory_block_threshold": 0.86,
-        "memory_warn_threshold":  0.76,
-        "memory_decay_days":      25,
+        "memory_min_trades":      6,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      30,
     },
 
-    # ── 5. BITCOIN — 24/7, alta volatilidad ─────────────────────
+    # ── 3. EUR/USD — 24/5 ──────────────────────────────────────
+    _sym("EURUSD"): {
+        "name":           "Euro / Dólar",
+        "currencies":     ["EUR", "USD"],
+        "strategy_type":  "CYCLE_REVERSION",
+        "strategy_extra_rules": (
+            "EURUSD — LONG-TERM H1/H4:\n"
+            "- Par más líquido del mundo. Sesión europea 07-17 UTC máxima actividad.\n"
+            "- Hurst 0.38-0.50: reversión desde S/R. Hurst > 0.55: momentum.\n"
+            "- ECB y Fed: calendario pausa automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.0,
+        "session_quality": {"asian": 0.3, "london": 1.0, "ny": 0.8, "dead": 0.2},
+        "sl_atr_mult":    1.5,
+        "tp_atr_mult":    3.0,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0012,
+        "price_scale":    1.10,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      30,
+    },
+
+    # ── 4. GBP/USD — 24/5 ──────────────────────────────────────
+    _sym("GBPUSD"): {
+        "name":           "Libra / Dólar (Cable)",
+        "currencies":     ["GBP", "USD"],
+        "strategy_type":  "MOMENTUM_SURGE",
+        "strategy_extra_rules": (
+            "GBPUSD — LONG-TERM H1/H4:\n"
+            "- Hora pico: 7-12 UTC. MACD + HA 3+ velas + Kalman alineado.\n"
+            "- BOE y UK CPI: calendario pausa automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 3.0,
+        "session_quality": {"asian": 0.2, "london": 1.0, "ny": 0.7, "dead": 0.2},
+        "sl_atr_mult":    2.0,
+        "tp_atr_mult":    5.0,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   32,
+        "rsi_overbought": 68,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.42,
+        "sr_tolerance_pct": 0.12,
+        "sr_lookback":    130,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0015,
+        "price_scale":    1.27,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 5. USD/JPY — 24/5 ──────────────────────────────────────
+    _sym("USDJPY"): {
+        "name":           "Dólar / Yen (Ninja)",
+        "currencies":     ["USD", "JPY"],
+        "strategy_type":  "TREND_KALMAN",
+        "strategy_extra_rules": (
+            "USDJPY — LONG-TERM H1/H4:\n"
+            "- Sesión asiática (00-09 UTC) CLAVE. Kalman slope primario.\n"
+            "- BOJ mueve el par 100+ pips. Calendario pausa automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.5,
+        "session_quality": {"asian": 0.8, "london": 0.9, "ny": 1.0, "dead": 0.3},
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.44,
+        "sr_tolerance_pct": 0.15,
+        "sr_lookback":    140,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.20,
+        "price_scale":    150.0,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 6. GBP/JPY — 24/5 ──────────────────────────────────────
+    _sym("GBPJPY"): {
+        "name":           "Libra / Yen (El Dragón)",
+        "currencies":     ["GBP", "JPY"],
+        "strategy_type":  "DRAGON_EXPLOSION",
+        "strategy_extra_rules": (
+            "GBPJPY — LONG-TERM H1/H4:\n"
+            "- Máxima selectividad. Hurst min 0.50 — sin tendencia este par destruye cuentas.\n"
+            "- Hora óptima: 7-12 UTC. Todos los indicadores deben alinearse."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 5.0,
+        "session_quality": {"asian": 0.5, "london": 1.0, "ny": 0.7, "dead": 0.2},
+        "sl_atr_mult":    3.0,
+        "tp_atr_mult":    6.0,
+        "be_atr_mult":    2.8,
+        "rsi_oversold":   28,
+        "rsi_overbought": 72,
+        "min_confidence": 7,
+        "min_decision_score": 4.5,
+        "min_hurst":      0.50,
+        "sr_tolerance_pct": 0.20,
+        "sr_lookback":    150,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 3, "H4": 4},
+        "atr_norm_factor":  0.35,
+        "price_scale":    195.0,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      3,
+        "memory_block_threshold": 0.85,
+        "memory_warn_threshold":  0.75,
+        "memory_decay_days":      60,
+    },
+
+    # ── 7. XAG/USD — 24/5 ──────────────────────────────────────
+    _sym("XAGUSD"): {
+        "name":           "Plata / Dólar (Silver)",
+        "currencies":     ["USD"],
+        "strategy_type":  "GOLD_BETA_REVERSION",
+        "strategy_extra_rules": (
+            "XAGUSD — LONG-TERM H1/H4:\n"
+            "- Sigue al oro con beta 1.5-3x. Sesión americana máxima liquidez.\n"
+            "- Movimientos más amplios que el oro. SL más holgado."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 4.0,
+        "session_quality": {"asian": 0.4, "london": 0.8, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    2.5,
+        "tp_atr_mult":    5.0,
+        "be_atr_mult":    2.8,
+        "rsi_oversold":   30,
+        "rsi_overbought": 70,
+        "min_confidence": 7,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.35,
+        "sr_tolerance_pct": 0.35,
+        "sr_lookback":    130,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.60,
+        "price_scale":    32.0,
+        "news_topics":    "economy_monetary,economy_macro,finance",
+        "memory_min_trades":      8,
+        "memory_block_threshold": 0.92,
+        "memory_warn_threshold":  0.82,
+        "memory_decay_days":      30,
+    },
+
+    # ── 8. WTI CRUDE OIL ───────────────────────────────────────
+    _sym("XTIUSD"): {
+        "name":           "Petróleo WTI (Crude Oil)",
+        "currencies":     ["USD"],
+        "strategy_type":  "RANGE_BREAKOUT_OIL",
+        "strategy_extra_rules": (
+            "WTI — LONG-TERM H1/H4:\n"
+            "- Mayor volatilidad: 13-18 UTC. EIA inventarios miércoles.\n"
+            "- OPEC puede dar movimiento brusco a cualquier hora."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 5.0,
+        "session_quality": {"asian": 0.3, "london": 0.6, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    2.0,
+        "tp_atr_mult":    4.0,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   32,
+        "rsi_overbought": 68,
+        "min_confidence": 7,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.30,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  1.50,
+        "price_scale":    75.0,
+        "news_topics":    "economy_macro,energy,commodities",
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      30,
+    },
+
+    # ── 9. NASDAQ 100 ──────────────────────────────────────────
+    _sym("USTEC"): {
+        "name":           "Nasdaq 100",
+        "currencies":     ["USD"],
+        "strategy_type":  "TECH_MOMENTUM",
+        "strategy_extra_rules": (
+            "NASDAQ — LONG-TERM H1/H4:\n"
+            "- Sesión americana 13-21 UTC máxima volatilidad.\n"
+            "- Hurst 0.35-0.45 natural en índices."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 5.0,
+        "session_quality": {"asian": 0.2, "london": 0.4, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   33,
+        "rsi_overbought": 67,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.20,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 4},
+        "atr_norm_factor":  60.0,
+        "price_scale":    21000.0,
+        "news_topics":    "economy_monetary,economy_macro,technology,earnings",
+        "memory_min_trades":      6,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      30,
+    },
+
+    # ── 10. DAX 40 ─────────────────────────────────────────────
+    _sym("DE40"): {
+        "name":           "DAX 40 (Alemania)",
+        "currencies":     ["EUR"],
+        "strategy_type":  "FRANKFURT_BREAKOUT",
+        "strategy_extra_rules": (
+            "DAX — LONG-TERM H1/H4:\n"
+            "- Apertura 06-09 UTC ruptura de rango. Sesión europea 09-17 UTC máxima liquidez.\n"
+            "- BCE y datos alemanes pausan automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 4.0,
+        "session_quality": {"asian": 0.2, "london": 1.0, "ny": 0.6, "dead": 0.2},
+        "sl_atr_mult":    2.0,
+        "tp_atr_mult":    4.0,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.20,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 4},
+        "atr_norm_factor":  50.0,
+        "price_scale":    22000.0,
+        "news_topics":    "economy_monetary,economy_macro,forex",
+        "memory_min_trades":      6,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      30,
+    },
+
+    # ── 11. EUR/JPY ────────────────────────────────────────────
+    _sym("EURJPY"): {
+        "name":           "Euro / Yen (Yuro)",
+        "currencies":     ["EUR", "JPY"],
+        "strategy_type":  "RISK_CARRY",
+        "strategy_extra_rules": (
+            "EURJPY — LONG-TERM H1/H4:\n"
+            "- Sesión asiática muy activa por Tokio. Risk-ON sube, risk-OFF cae.\n"
+            "- ECB y BOJ pausan automáticamente."
+        ),
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 3.0,
+        "session_quality": {"asian": 0.8, "london": 1.0, "ny": 0.7, "dead": 0.3},
+        "sl_atr_mult":    2.2,
+        "tp_atr_mult":    4.4,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   32,
+        "rsi_overbought": 68,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.15,
+        "sr_lookback":    130,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.22,
+        "price_scale":    165.0,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      4,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      35,
+    },
+
+    # ── 12. BITCOIN — 24/7 ─────────────────────────────────────
     _sym("BTCUSD"): {
         "name":           "Bitcoin / Dólar",
         "currencies":     ["USD"],
         "strategy_type":  "CRYPTO_WAVE",
         "strategy_extra_rules": (
-            "ESTRATEGIA SCALPING CRYPTO_WAVE — Bitcoin (BTCUSD):\n"
-            "- Opera 7 días / 24 horas. Modo SCALPING PURO en M1. Objetivo: $10-60 USD/trade.\n"
-            "- Mayor volatilidad: 14-22 UTC (Europa activa + Asia despertando).\n"
-            "- ATR M1 de BTC muy alto — usar lot sizes pequeños (0.01-0.05).\n"
-            "- Fisher extremo (>3.0 o <-3.0): reversiones de ciclo importantes.\n"
-            "- Hilbert LOCAL_MIN/LOCAL_MAX son señales muy confiables en BTC.\n"
-            "- TP SIMÉTRICO — R:R = 1.67, BUY y SELL igualmente válidos.\n"
-            "- Hurst > 0.40 requerido. BTC aleatorio sin tendencia = trampa.\n"
-            "- Fin de semana: oportunidades válidas pero spread mayor — usar cautela."
+            "BTC — LONG-TERM H1/H4:\n"
+            "- 24/7. Hurst > 0.46 requerido. BTC aleatorio = trampa.\n"
+            "- Mejor ventana: 14-22 UTC."
         ),
         "session_start":  0,
         "session_end":    24,
-        "max_spread_pips": 8.0,    # BTC: crypto, spread alto es normal
-        "session_quality": {       # Factor de calidad por sesión (0.0-1.0)
-            "asian":  0.7,         # 0-7 UTC
-            "london": 0.8,         # 7-13 UTC
-            "ny":     1.0,         # 13-21 UTC
-            "dead":   0.6,         # 21-24 UTC
-        },
-        "sl_atr_mult":    3.0,
-        "tp_atr_mult_buy":  5.0,
-        "tp_atr_mult_sell": 5.0,   # TP simétrico — R:R = 1.67
-        "be_atr_mult":    3.0,
+        "max_spread_pips": 15.0,   # BTC spread alto es normal en H1
+        "session_quality": {"asian": 0.7, "london": 0.8, "ny": 1.0, "dead": 0.6},
+        "sl_atr_mult":    4.0,
+        "tp_atr_mult":    8.0,
+        "be_atr_mult":    3.3,
         "rsi_oversold":   28,
         "rsi_overbought": 72,
         "min_confidence": 7,
-        "min_decision_score": 5.0,
-        "min_hurst":      0.40,
+        "min_decision_score": 4.5,
+        "min_hurst":      0.46,
         "sr_tolerance_pct": 0.50,
-        "sr_lookback":    100,
-        "sr_timeframes":  ["M5", "M15", "H1"],
-        "tf_weights":     {"M5": 1, "M15": 2, "H1": 3},
+        "sr_lookback":    150,
+        "sr_timeframes":  ["H1", "H4", "D1"],
+        "tf_weights":     {"H1": 1, "H4": 3, "D1": 4},
         "atr_norm_factor":  2000.0,
         "price_scale":    85000.0,
         "news_topics":    "blockchain,technology,economy_monetary",
@@ -411,13 +566,261 @@ SYMBOLS = {
         "memory_warn_threshold":  0.75,
         "memory_decay_days":      20,
     },
+
+    # ── 13. AUD/USD ────────────────────────────────────────────
+    _sym("AUDUSD"): {
+        "name":           "Dólar Australiano / Dólar (Aussie)",
+        "currencies":     ["AUD", "USD"],
+        "strategy_type":  "COMMODITY_PROXY",
+        "strategy_extra_rules": "AUDUSD — Correlación con commodities. RBA y datos chinos.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.0,
+        "session_quality": {"asian": 0.8, "london": 0.8, "ny": 1.0, "dead": 0.3},
+        "sl_atr_mult":    1.6,
+        "tp_atr_mult":    3.2,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0010,
+        "price_scale":    0.65,
+        "news_topics":    "economy_monetary,forex,economy_macro,commodities",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 14. USD/CAD ────────────────────────────────────────────
+    _sym("USDCAD"): {
+        "name":           "Dólar / Dólar Canadiense (Loonie)",
+        "currencies":     ["USD", "CAD"],
+        "strategy_type":  "OIL_PROXY_TREND",
+        "strategy_extra_rules": "USDCAD — Correlación inversa con WTI. BOC y NFP canadiense.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.5,
+        "session_quality": {"asian": 0.3, "london": 0.7, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    1.6,
+        "tp_atr_mult":    3.2,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.42,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0012,
+        "price_scale":    1.36,
+        "news_topics":    "economy_monetary,forex,economy_macro,energy",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 15. USD/CHF ────────────────────────────────────────────
+    _sym("USDCHF"): {
+        "name":           "Dólar / Franco Suizo (Swissy)",
+        "currencies":     ["USD", "CHF"],
+        "strategy_type":  "SAFE_HAVEN_CYCLE",
+        "strategy_extra_rules": "USDCHF — Safe haven. Correlación inversa con oro. SNB interviene.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.5,
+        "session_quality": {"asian": 0.3, "london": 1.0, "ny": 0.7, "dead": 0.2},
+        "sl_atr_mult":    1.5,
+        "tp_atr_mult":    3.0,
+        "be_atr_mult":    2.2,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.10,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0010,
+        "price_scale":    0.90,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 16. NZD/USD ────────────────────────────────────────────
+    _sym("NZDUSD"): {
+        "name":           "Dólar Neozelandés / Dólar (Kiwi)",
+        "currencies":     ["NZD", "USD"],
+        "strategy_type":  "PACIFIC_REVERSION",
+        "strategy_extra_rules": "NZDUSD — Ciclos claros en sesión asiática. RBNZ mueve el par.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.5,
+        "session_quality": {"asian": 0.8, "london": 0.7, "ny": 0.8, "dead": 0.3},
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.40,
+        "sr_tolerance_pct": 0.12,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0008,
+        "price_scale":    0.60,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 17. EUR/GBP ────────────────────────────────────────────
+    _sym("EURGBP"): {
+        "name":           "Euro / Libra (Channel)",
+        "currencies":     ["EUR", "GBP"],
+        "strategy_type":  "EU_CROSS_RANGE",
+        "strategy_extra_rules": "EURGBP — Par de rango. Reversiones desde S/R. ECB y BOE.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 2.0,
+        "session_quality": {"asian": 0.2, "london": 1.0, "ny": 0.5, "dead": 0.2},
+        "sl_atr_mult":    1.4,
+        "tp_atr_mult":    2.8,
+        "be_atr_mult":    2.0,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.08,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.0006,
+        "price_scale":    0.85,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      7,
+        "memory_block_threshold": 0.92,
+        "memory_warn_threshold":  0.82,
+        "memory_decay_days":      30,
+    },
+
+    # ── 18. AUD/JPY ────────────────────────────────────────────
+    _sym("AUDJPY"): {
+        "name":           "Dólar Australiano / Yen (Risk Barometer)",
+        "currencies":     ["AUD", "JPY"],
+        "strategy_type":  "RISK_CARRY_PACIFIC",
+        "strategy_extra_rules": "AUDJPY — Risk barometer. Risk-ON sube, risk-OFF cae. RBA y BOJ.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 3.5,
+        "session_quality": {"asian": 0.9, "london": 0.8, "ny": 0.8, "dead": 0.3},
+        "sl_atr_mult":    2.0,
+        "tp_atr_mult":    4.0,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   32,
+        "rsi_overbought": 68,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.42,
+        "sr_tolerance_pct": 0.15,
+        "sr_lookback":    130,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 3},
+        "atr_norm_factor":  0.22,
+        "price_scale":    95.0,
+        "news_topics":    "economy_monetary,forex,economy_macro",
+        "memory_min_trades":      5,
+        "memory_block_threshold": 0.90,
+        "memory_warn_threshold":  0.80,
+        "memory_decay_days":      35,
+    },
+
+    # ── 19. ETH/USD — 24/7 ─────────────────────────────────────
+    _sym("ETHUSD"): {
+        "name":           "Ethereum / Dólar",
+        "currencies":     ["USD"],
+        "strategy_type":  "CRYPTO_WAVE_ETH",
+        "strategy_extra_rules": "ETHUSD — Beta de BTC. Hurst > 0.46. Mayor volatilidad que BTC.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 12.0,
+        "session_quality": {"asian": 0.7, "london": 0.8, "ny": 1.0, "dead": 0.5},
+        "sl_atr_mult":    4.5,
+        "tp_atr_mult":    9.0,
+        "be_atr_mult":    3.5,
+        "rsi_oversold":   28,
+        "rsi_overbought": 72,
+        "min_confidence": 7,
+        "min_decision_score": 4.5,
+        "min_hurst":      0.46,
+        "sr_tolerance_pct": 0.60,
+        "sr_lookback":    150,
+        "sr_timeframes":  ["H1", "H4", "D1"],
+        "tf_weights":     {"H1": 1, "H4": 3, "D1": 4},
+        "atr_norm_factor":  50.0,
+        "price_scale":    2500.0,
+        "news_topics":    "blockchain,technology,economy_monetary",
+        "memory_min_trades":      3,
+        "memory_block_threshold": 0.85,
+        "memory_warn_threshold":  0.75,
+        "memory_decay_days":      20,
+    },
+
+    # ── 20. US30 (Dow Jones) ───────────────────────────────────
+    _sym("US30"): {
+        "name":           "Dow Jones Industrial Average",
+        "currencies":     ["USD"],
+        "strategy_type":  "DOW_BREAKOUT",
+        "strategy_extra_rules": "US30 — Sesión americana. Correlacionado con US500. Industriales y finanzas.",
+        "session_start":  0,
+        "session_end":    24,
+        "max_spread_pips": 6.0,
+        "session_quality": {"asian": 0.2, "london": 0.4, "ny": 1.0, "dead": 0.2},
+        "sl_atr_mult":    1.8,
+        "tp_atr_mult":    3.6,
+        "be_atr_mult":    2.3,
+        "rsi_oversold":   35,
+        "rsi_overbought": 65,
+        "min_confidence": 6,
+        "min_decision_score": 4.0,
+        "min_hurst":      0.38,
+        "sr_tolerance_pct": 0.20,
+        "sr_lookback":    120,
+        "sr_timeframes":  ["H1", "H4"],
+        "tf_weights":     {"H1": 2, "H4": 4},
+        "atr_norm_factor":  200.0,
+        "price_scale":    40000.0,
+        "news_topics":    "economy_monetary,economy_macro,finance,earnings",
+        "memory_min_trades":      6,
+        "memory_block_threshold": 0.88,
+        "memory_warn_threshold":  0.78,
+        "memory_decay_days":      30,
+    },
 }
 
 # ================================================================
 #  GESTIÓN DE RIESGO GLOBAL
 # ================================================================
-RISK_PER_TRADE      = 0.02   # 2% del balance por trade (v7.0: 1%→2% para target $5 mínimo)
-MAX_OPEN_TRADES     = 5      # máximo global — 1 por símbolo × 5 símbolos
+RISK_PER_TRADE      = 0.01   # v8.0: 1% del balance por trade (conservador para recuperar cuenta)
+MAX_OPEN_TRADES     = 10     # v8.0: máximo global — 20 símbolos, max 10 simultáneos
 MAX_OPEN_PER_SYMBOL = int(os.environ.get("MAX_OPEN_PER_SYMBOL", "1") or 1)
 MAGIC_NUMBER        = 202606
 
@@ -428,8 +831,8 @@ BREAKEVEN_ATR_MULT  = 1.5    # 1.0 = activar BE cuando precio se mueve 1×ATR en
 
 # FIX v6.4: Cooldown entre trades del mismo símbolo
 # Previene reabrir el mismo trade inmediatamente (300s = 5 minutos)
-# FIX v7.0: Cooldown reducido de 180s a 30s para scalping M1 sniper agresivo
-SYMBOL_COOLDOWN_SEC = int(os.environ.get("SYMBOL_COOLDOWN_SEC", "30") or 30)
+# v8.0: Cooldown 300s (5 min) para long-term H1 — no necesitamos reentrar rápido
+SYMBOL_COOLDOWN_SEC = int(os.environ.get("SYMBOL_COOLDOWN_SEC", "300") or 300)
 
 # Cooldown específico para avisos de "bloqueo por memoria" en Telegram.
 # Evita repetir el mismo warning una y otra vez cuando el símbolo sigue
@@ -460,16 +863,13 @@ CIRCUIT_BREAKER_MAX_DRAWDOWN_PCT = float(
 # Mientras el bot tenga menos de WARMUP_TRADE_COUNT trades en memoria,
 # opera en "Modo Calentamiento": lot reducido + filtros más estrictos.
 # Configurable vía .env para ajuste sin tocar el código.
-# FIX v6.6: Reducido de 100 a 50. Con 100 trades de warmup, el bot bloqueaba
-# demasiado tiempo en todos los símbolos que no sean tendencia pura.
-# 50 trades es suficiente para tener una muestra estadística inicial.
-# Configurable vía .env: WARMUP_TRADE_COUNT=50
-WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "50")))
-WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "0.5"))
+# v8.0: Warmup desactivado efectivamente — umbrales muy altos para no bloquear.
+# El bot opera con risk_per_trade=1% desde el primer trade (conservador de base).
+WARMUP_TRADE_COUNT  = int(float(os.environ.get("WARMUP_TRADE_COUNT",  "0")))
+WARMUP_LOT_FACTOR   = float(os.environ.get("WARMUP_LOT_FACTOR", "1.0"))
 
-# Tiempo de espera entre iteraciones del ciclo principal (segundos)
-# FIX: 10→5s — ciclo más rápido para entradas sniper M1
-LOOP_SLEEP_SEC      = int(os.environ.get("LOOP_SLEEP_SEC", "5") or 5)
+# v8.0: Ciclo de 30s — en H1 no necesitamos chequear cada 5 segundos
+LOOP_SLEEP_SEC      = int(os.environ.get("LOOP_SLEEP_SEC", "30") or 30)
 
 MAX_DAILY_LOSS      = 0.05   # 5% pérdida máxima diaria
 
@@ -491,17 +891,20 @@ CCI_PERIOD   = 20
 VWAP_ENABLED = True
 HA_FILTER    = True
 
-HILBERT_ENABLED = True
-HURST_ENABLED   = True
-KALMAN_ENABLED  = True
-FOURIER_ENABLED = True
-FISHER_ENABLED  = True
+# v8.0: Solo indicadores que funcionan bien en H1/H4.
+# Hilbert, Fourier y Fisher desactivados — diseñados para ciclos cortos, no H1.
+HILBERT_ENABLED = False
+HURST_ENABLED   = True    # Régimen de mercado — esencial
+KALMAN_ENABLED  = True    # Precio suavizado sin lag — esencial
+FOURIER_ENABLED = False
+FISHER_ENABLED  = False
 
 # ================================================================
 #  TIMEFRAMES
 # ================================================================
-TF_ENTRY = "M1"
-TF_TREND = "M15"
+# v8.0: Long-term timeframes — H1 entrada, H4 tendencia
+TF_ENTRY = "H1"
+TF_TREND = "H4"
 
 # ================================================================
 #  NOTICIAS
@@ -568,10 +971,10 @@ CONFLUENCE_HARD_GATE_MULT = 2   # Recomendado: 2 (balance permisividad/seguridad
 #  FASE 3 — SCORECARD JERÁRQUICO POR ACTIVO
 # ================================================================
 # Historial máximo (últimos trades cerrados por símbolo) para evaluar setup.
+# v8.0: Scorecard DESACTIVADO — min_sample imposible de alcanzar, no bloquea nada.
+# Reactivar cuando tengamos 500+ trades rentables con el nuevo setup long-term.
 SCORECARD_LOOKBACK_TRADES = 300
-# Muestra mínima (WIN+LOSS, BE excluido) para considerar estadística confiable.
-SCORECARD_MIN_SAMPLE      = 6
-# Win rate mínimo (%) exigido para permitir el setup (si hay muestra suficiente).
+SCORECARD_MIN_SAMPLE      = 999999
 SCORECARD_MIN_WIN_RATE    = 50.0
 # Endurecimiento dinámico: +1 punto de confianza mínima si scorecard es débil.
 SCORECARD_MIN_CONF_BONUS  = 1
@@ -582,7 +985,8 @@ SCORECARD_MIN_CONF_BONUS  = 1
 # Ventana histórica para métricas de policy por activo/setup.
 POLICY_LOOKBACK_TRADES    = 300
 # Muestra mínima para considerar estable el policy score.
-POLICY_MIN_SAMPLE         = 8
+# v8.0: Policy Engine DESACTIVADO — misma razón que Scorecard.
+POLICY_MIN_SAMPLE         = 999999
 # Pesos del ranking (deben sumar ~1.0).
 POLICY_WEIGHT_WR          = 0.40
 POLICY_WEIGHT_PF          = 0.25
@@ -636,11 +1040,13 @@ TILT_RESET_ON_WIN            = _env_flag("TILT_RESET_ON_WIN", True)
 # ================================================================
 # Si un trade lleva más de TIME_EXIT_MAX_MINUTES abierto, se cierra.
 # Previene que trades perdedores se arrastren indefinidamente.
+# v8.0: Time exit ajustado para long-term — 480 min (8 horas) max hold.
+# En H1 los trades necesitan tiempo para desarrollarse.
 TIME_EXIT_ENABLED           = _env_flag("TIME_EXIT_ENABLED", True)
-TIME_EXIT_MAX_MINUTES       = int(os.environ.get("TIME_EXIT_MAX_MINUTES", "45"))
+TIME_EXIT_MAX_MINUTES       = int(os.environ.get("TIME_EXIT_MAX_MINUTES", "480"))
 TIME_EXIT_PROFIT_ONLY       = _env_flag("TIME_EXIT_PROFIT_ONLY", False)
-# A los N minutos, mover SL a breakeven si el trade está en profit
-TIME_EXIT_MOVE_BE_MINUTES   = int(os.environ.get("TIME_EXIT_MOVE_BE_MINUTES", "20"))
+# A las 2 horas, mover SL a breakeven si el trade está en profit
+TIME_EXIT_MOVE_BE_MINUTES   = int(os.environ.get("TIME_EXIT_MOVE_BE_MINUTES", "120"))
 TIME_EXIT_MOVE_BE_ENABLED   = _env_flag("TIME_EXIT_MOVE_BE_ENABLED", True)
 
 # ================================================================
@@ -721,7 +1127,7 @@ TRUEFX_ENABLED               = os.path.isdir(TRUEFX_DATA_DIR)
 # ================================================================
 #  FASE 12 — ADF STATIONARITY + Z-SCORE FILTER
 # ================================================================
-ADF_ENABLED              = True    # Activar test ADF como complemento de Hurst
+ADF_ENABLED              = False   # v8.0: Desactivado — innecesario en H1 con Hurst
 ADF_PVALUE_THRESHOLD     = 0.05    # p-value máximo para considerar estacionario
 ZSCORE_LOOKBACK          = 50      # Ventana de lookback para Z-score
 ZSCORE_ENTRY_THRESHOLD   = 1.5     # Z-score mínimo para señal de reversal
@@ -752,8 +1158,9 @@ ROLLING_CORR_TTL_SEC     = int(os.environ.get("ROLLING_CORR_TTL_SEC", "300") or 
 # ================================================================
 # Antes de abrir un trade, verifica que el timeframe superior (H1)
 # confirme la misma dirección que la señal de entrada (M1/M15).
+# v8.0: MTF confirma con D1 (entrada es H1, trend es H4, confirmación D1)
 MTF_ENABLED            = _env_flag("MTF_ENABLED", True)
-MTF_HIGHER_TF          = os.environ.get("MTF_HIGHER_TF", "H1")           # Timeframe superior para confirmar
+MTF_HIGHER_TF          = os.environ.get("MTF_HIGHER_TF", "D1")           # Timeframe superior para confirmar
 MTF_CANDLES            = int(os.environ.get("MTF_CANDLES", "100") or 100) # Velas a pedir del TF superior
 MTF_REQUIRE_AGREEMENT  = _env_flag("MTF_REQUIRE_AGREEMENT", True)         # Si True, bloquea trades sin confirmación HTF
 MTF_PENALTY_SCORE      = float(os.environ.get("MTF_PENALTY_SCORE", "2.0") or 2.0)  # Penalización al score en modo soft
